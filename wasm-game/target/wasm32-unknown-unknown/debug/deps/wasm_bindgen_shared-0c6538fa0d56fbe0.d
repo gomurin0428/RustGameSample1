@@ -1,0 +1,12 @@
+C:\Users\gomur\source\repos\RustGameSample1\wasm-game\target\wasm32-unknown-unknown\debug\deps\wasm_bindgen_shared-0c6538fa0d56fbe0.d: C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\lib.rs C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\identifier.rs C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\tys.rs
+
+C:\Users\gomur\source\repos\RustGameSample1\wasm-game\target\wasm32-unknown-unknown\debug\deps\libwasm_bindgen_shared-0c6538fa0d56fbe0.rlib: C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\lib.rs C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\identifier.rs C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\tys.rs
+
+C:\Users\gomur\source\repos\RustGameSample1\wasm-game\target\wasm32-unknown-unknown\debug\deps\libwasm_bindgen_shared-0c6538fa0d56fbe0.rmeta: C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\lib.rs C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\identifier.rs C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\tys.rs
+
+C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\lib.rs:
+C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\identifier.rs:
+C:\Users\gomur\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\wasm-bindgen-shared-0.2.104\src\tys.rs:
+
+# env-dep:CARGO_PKG_VERSION=0.2.104
+# env-dep:WBG_VERSION

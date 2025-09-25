@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rust + WebAssembly Mini Game</title>
+    
+<script type="module">
+import init, * as bindings from '/wasm-game-3c180a2648c63107.js';
+const wasm = await init({ module_or_path: '/wasm-game-3c180a2648c63107_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    <style>
+      :root {
+        color-scheme: dark light;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: #0b1120;
+        color: #e5e7eb;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+      }
+
+      main {
+        padding: 32px 24px 40px;
+        display: grid;
+        gap: 16px;
+        text-align: center;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.5rem, 2vw + 1rem, 2.5rem);
+      }
+
+      canvas {
+        border-radius: 12px;
+        box-shadow: 0 16px 48px rgba(15, 23, 42, 0.6);
+        background: #111827;
+      }
+
+      p {
+        margin: 0;
+        font-size: 0.95rem;
+        color: #cbd5f5;
+      }
+    </style>
+  <link rel="modulepreload" href="/wasm-game-3c180a2648c63107.js" crossorigin="anonymous" integrity="sha384-wwfuBe0+gm3AyJW9YRo13GhiwEFGJWAYutY2D9AXnkZ5YOs3bijPe4MKh85oJvcA"><link rel="preload" href="/wasm-game-3c180a2648c63107_bg.wasm" crossorigin="anonymous" integrity="sha384-AIk4bAOOQZYMKkFERSVMu2t+tCBu+C4tI37kFki9AFFonwPyoFGBpqykQxbHNyaC" as="fetch" type="application/wasm"></head>
+  <body>
+    <main>
+      <h1>Rust + WebAssembly Mini Game</h1>
+      <canvas id="game-canvas" width="640" height="480"></canvas>
+      <p>矢印キーまたは WASD キーでプレイヤーを動かして、オレンジのコインを集めましょう。</p>
+    </main>
+    <script type="module">
+      import init from "./wasm-game.js";
+
+      init().catch((err) => console.error("wasm 初期化に失敗しました", err));
+    </script>
+  <script>"use strict";
+
+(function () {
+
+    const address = '{{__TRUNK_ADDRESS__}}';
+    const base = '{{__TRUNK_WS_BASE__}}';
+    let protocol = '';
+    protocol =
+        protocol
+            ? protocol
+            : window.location.protocol === 'https:'
+                ? 'wss'
+                : 'ws';
+    const url = protocol + '://' + address + base + '.well-known/trunk/ws';
+
+    class Overlay {
+        constructor() {
+            // create an overlay
+            this._overlay = document.createElement("div");
+            const style = this._overlay.style;
+            style.height = "100vh";
+            style.width = "100vw";
+            style.position = "fixed";
+            style.top = "0";
+            style.left = "0";
+            style.backgroundColor = "rgba(222, 222, 222, 0.5)";
+            style.fontFamily = "sans-serif";
+            // not sure that's the right approach
+            style.zIndex = "1000000";
+            style.backdropFilter = "blur(1rem)";
+
+            const container = document.createElement("div");
+            // center it
+            container.style.position = "absolute";
+            container.style.top = "30%";
+            container.style.left = "15%";
+            container.style.maxWidth = "85%";
+
+            this._title = document.createElement("div");
+            this._title.innerText = "Build failure";
+            this._title.style.paddingBottom = "2rem";
+            this._title.style.fontSize = "2.5rem";
+
+            this._message = document.createElement("div");
+            this._message.style.whiteSpace = "pre-wrap";
+
+            const icon= document.createElement("div");
+            icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="#dc3545" viewBox="0 0 16 16"><path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></svg>';
+            this._title.prepend(icon);
+
+            container.append(this._title, this._message);
+            this._overlay.append(container);
+
+            this._inject();
+            window.setInterval(() => {
+                this._inject();
+            }, 250);
+        }
+
+        set reason(reason) {
+            this._message.textContent = reason;
+        }
+
+        _inject() {
+            if (!this._overlay.isConnected) {
+                // prepend it
+                document.body?.prepend(this._overlay);
+            }
+        }
+
+    }
+
+    class Client {
+        constructor(url) {
+            this.url = url;
+            this.poll_interval = 5000;
+            this._overlay = null;
+        }
+
+        start() {
+            const ws = new WebSocket(this.url);
+            ws.onmessage = (ev) => {
+                const msg = JSON.parse(ev.data);
+                switch (msg.type) {
+                    case "reload":
+                        this.reload();
+                        break;
+                    case "buildFailure":
+                        this.buildFailure(msg.data)
+                        break;
+                }
+            };
+            ws.onclose = () => this.onclose();
+        }
+
+        onclose() {
+            window.setTimeout(
+                () => {
+                    // when we successfully reconnect, we'll force a
+                    // reload (since we presumably lost connection to
+                    // trunk due to it being killed, so it will have
+                    // rebuilt on restart)
+                    const ws = new WebSocket(this.url);
+                    ws.onopen = () => window.location.reload();
+                    ws.onclose = () => this.onclose();
+                },
+                this.poll_interval);
+        }
+
+        reload() {
+            window.location.reload();
+        }
+
+        buildFailure({reason}) {
+            // also log the console
+            console.error("Build failed:", reason);
+
+            console.debug("Overlay", this._overlay);
+
+            if (!this._overlay) {
+                this._overlay = new Overlay();
+            }
+            this._overlay.reason = reason;
+        }
+    }
+
+    new Client(url).start();
+
+})()
+</script></body>
+</html>
