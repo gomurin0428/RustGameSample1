@@ -42,7 +42,7 @@ Eversim 社の *Geo-Political Simulator* 系列を意識し、本プロジェク
 
 #### 1. タイムスケジューラ
 - **多層カレンダー**: ゲーム内時刻を `GameClock` (分精度) と `CalendarDate` (日/月/年) の二層で管理。`GameState` に `Scheduler` 構造体を追加し、`VecDeque<ScheduledTask>` でイベントを管理。
-- **タスク種別**: `EconomicTick`, `EventTrigger`, `PolicyResolution`, `DiplomaticPulse` など列挙体で定義。各タスクは `execute(&mut GameState)` を実装。
+- [x] **タスク種別**: `EconomicTick`, `EventTrigger`, `PolicyResolution`, `DiplomaticPulse` を列挙体で定義し、`ScheduledTask::execute(&mut GameState, scale)` で処理を実装済み。
 - **優先度付き挿入**: 近い未来のタスクを `BinaryHeap` で優先度管理し、長期タスクは `VecDeque` に保持。メモリ節約のため、1年先以降のタスクは圧縮される。
 - **繰り返しタスク**: 定期処理用に `ScheduleSpec` を導入 (例: 毎3時間、毎日、毎週)。タスク実行後に次回を自動再登録。
 - **UI 連携**: `GameClock` の現在値と次回イベント時刻を GUI に公開。プレイヤーは「高速」「標準」「低速」などの時間倍率を変更できるよう、`tick_minutes` を倍率対応に拡張。

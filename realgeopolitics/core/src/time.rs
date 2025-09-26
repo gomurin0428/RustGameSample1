@@ -21,9 +21,7 @@ impl GameClock {
     pub fn advance_minutes(&mut self, minutes: f64) -> u64 {
         let minutes_u64 = minutes.round() as i64;
         assert!(minutes_u64 >= 0, "advance_minutes に負数は指定できません");
-        self.total_minutes = self
-            .total_minutes
-            .saturating_add(minutes_u64 as u64);
+        self.total_minutes = self.total_minutes.saturating_add(minutes_u64 as u64);
         minutes_u64 as u64
     }
 }

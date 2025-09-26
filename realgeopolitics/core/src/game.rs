@@ -5,7 +5,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
-use crate::{CalendarDate, GameClock, Scheduler, ScheduledTask, TaskKind};
+use crate::{CalendarDate, GameClock, ScheduledTask, Scheduler, TaskKind};
 
 const BASE_TICK_MINUTES: f64 = 60.0;
 const MAX_RELATION: i32 = 100;
@@ -155,10 +155,20 @@ impl GameState {
 
         let mut scheduler = Scheduler::new();
         scheduler.schedule(
-            ScheduledTask::new(TaskKind::EconomicTick, BASE_TICK_MINUTES as u64).with_repeat(BASE_TICK_MINUTES as u64),
+            ScheduledTask::new(TaskKind::EconomicTick, BASE_TICK_MINUTES as u64)
+                .with_repeat(BASE_TICK_MINUTES as u64),
         );
         scheduler.schedule(
-            ScheduledTask::new(TaskKind::DiplomaticPulse, (BASE_TICK_MINUTES * 6.0) as u64).with_repeat((BASE_TICK_MINUTES * 6.0) as u64),
+            ScheduledTask::new(TaskKind::EventTrigger, (BASE_TICK_MINUTES * 4.0) as u64)
+                .with_repeat((BASE_TICK_MINUTES * 4.0) as u64),
+        );
+        scheduler.schedule(
+            ScheduledTask::new(TaskKind::PolicyResolution, MINUTES_PER_DAY)
+                .with_repeat(MINUTES_PER_DAY),
+        );
+        scheduler.schedule(
+            ScheduledTask::new(TaskKind::DiplomaticPulse, (BASE_TICK_MINUTES * 6.0) as u64)
+                .with_repeat((BASE_TICK_MINUTES * 6.0) as u64),
         );
 
         Ok(Self {
@@ -231,23 +241,26 @@ impl GameState {
         let mut reports = Vec::new();
 
         let ready_tasks = self.scheduler.next_ready_tasks(&self.clock);
-        for task in ready_tasks {
-            match task.kind {
-                TaskKind::EconomicTick => {
-                    reports.push("定期的な経済チェックを実行しました。".to_string());
+        if ready_tasks.is_empty() {
+            reports.push(format!(
+                "{:.1} 分経過しましたが、スケジュールされた処理はありません。",
+                minutes
+            ));
+        } else {
+            for task in ready_tasks {
+                let mut task_reports = task.execute(self, scale);
+                if task_reports.is_empty() {
+                    continue;
                 }
-                TaskKind::EventTrigger => {
-                    reports.push("イベント判定を実行しました。".to_string());
-                }
-                TaskKind::PolicyResolution => {
-                    reports.push("政策効果を更新しました。".to_string());
-                }
-                TaskKind::DiplomaticPulse => {
-                    reports.push("外交関係を再評価しました。".to_string());
-                }
+                reports.append(&mut task_reports);
             }
         }
 
+        Ok(reports)
+    }
+
+    fn process_economic_tick(&mut self, scale: f64) -> Vec<String> {
+        let mut reports = Vec::new();
         for idx in 0..self.countries.len() {
             let mut country_reports = self.apply_budget_effects(idx, scale);
             if let Some(event_report) = self.trigger_random_event(idx, scale) {
@@ -258,14 +271,85 @@ impl GameState {
             }
             reports.extend(country_reports);
         }
+        reports
+    }
 
-        Ok(reports)
+    fn process_event_trigger(&mut self) -> Vec<String> {
+        let mut reports = Vec::new();
+        for country in &mut self.countries {
+            if country.stability < 35 {
+                country.approval = clamp_metric(country.approval - 2);
+                reports.push(format!(
+                    "{} で治安不安が高まり、国民支持が低下しました。",
+                    country.name
+                ));
+            } else if country.approval < 30 {
+                country.stability = clamp_metric(country.stability - 1);
+                reports.push(format!(
+                    "{} では抗議活動が発生し、安定度がわずかに悪化しました。",
+                    country.name
+                ));
+            }
+        }
+        reports
+    }
+
+    fn process_policy_resolution(&mut self) -> Vec<String> {
+        let mut reports = Vec::new();
+        for country in &mut self.countries {
+            let allocation = country.allocations();
+            let slack = (1.0 - allocation.total()).max(0.0);
+            if slack > 0.05 {
+                let reserve = country.gdp * slack * 0.01;
+                country.budget += reserve;
+                reports.push(format!(
+                    "{} は未配分予算 {:.1} を予備費に積み増しました。",
+                    country.name, reserve
+                ));
+            }
+            if country.resources < 25 {
+                country.gdp = (country.gdp - 20.0).max(0.0);
+                reports.push(format!(
+                    "{} は資源不足で生産が停滞しています。",
+                    country.name
+                ));
+            }
+        }
+        reports
+    }
+
+    fn process_diplomatic_pulse(&mut self) -> Vec<String> {
+        let mut reports = Vec::new();
+        let len = self.countries.len();
+        for idx in 0..len {
+            for other in (idx + 1)..len {
+                let partner_name = self.countries[other].name.clone();
+                if let Some(&relation) = self.countries[idx].relations.get(&partner_name) {
+                    let adjustment = if relation > 75 {
+                        -1
+                    } else if relation < -60 {
+                        2
+                    } else if relation < 30 {
+                        1
+                    } else {
+                        0
+                    };
+                    if adjustment != 0 {
+                        self.adjust_bilateral_relation(idx, other, adjustment, adjustment);
+                        reports.push(format!(
+                            "{} と {} の関係値を調整しました (Δ {})",
+                            self.countries[idx].name, partner_name, adjustment
+                        ));
+                    }
+                }
+            }
+        }
+        reports
     }
 
     fn apply_budget_effects(&mut self, idx: usize, scale: f64) -> Vec<String> {
         let mut reports = Vec::new();
-        let allocation = self.countries[idx]
-            .allocations();
+        let allocation = self.countries[idx].allocations();
         let total_allocation = allocation.total();
 
         let revenue = {
@@ -518,6 +602,17 @@ fn clamp_relation(value: i32) -> i32 {
 
 fn clamp_resource(value: i32) -> i32 {
     value.clamp(MIN_RESOURCES, MAX_RESOURCES)
+}
+
+impl ScheduledTask {
+    pub fn execute(&self, game: &mut GameState, scale: f64) -> Vec<String> {
+        match self.kind {
+            TaskKind::EconomicTick => game.process_economic_tick(scale),
+            TaskKind::EventTrigger => game.process_event_trigger(),
+            TaskKind::PolicyResolution => game.process_policy_resolution(),
+            TaskKind::DiplomaticPulse => game.process_diplomatic_pulse(),
+        }
+    }
 }
 
 #[cfg(test)]
