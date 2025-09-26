@@ -45,3 +45,15 @@ Web 版の wasm ビルドを検証したい場合は:
 ```powershell
 & "C:\Users\gomur\.cargo\bin\cargo.exe" build -p realgeopolitics-web --target wasm32-unknown-unknown
 ```
+## カバレッジレポート
+
+1. ルートで `coverage.ps1` を実行します。
+   ```powershell
+   .\coverage.ps1
+   ```
+2. `coverage/html/index.html` をブラウザで開くと HTML レポートを、`coverage/lcov.info` で LCOV 形式のレポートを確認できます。CI 連携では `coverage/lcov.info` をアップロードしてください。
+
+補足: `cargo coverage` で HTML レポートのみを再生成し、`cargo llvm-cov report --lcov --output-path coverage/lcov.info` で LCOV を単独更新することも可能です。
+
+
+

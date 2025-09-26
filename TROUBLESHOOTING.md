@@ -1,6 +1,7 @@
 # TROUBLESHOOTING
 
 - `cargo` コマンドが認識されない場合は、`%USERPROFILE%\.cargo\bin\cargo.exe` を直接呼び出してください。PowerShell で別プロセスとして `_codex_env.ps1` を実行しただけでは PATH が更新されません。
+- `coverage.ps1` 実行時に `cargo coverage` が見つからない場合は、リポジトリ直下の `.cargo/config.toml` と `cargo-llvm-cov` のインストール状態 (`C:\Users\<user>\.cargo\bin\cargo-llvm-cov.exe`) を確認してください。存在しない場合は `& "$env:USERPROFILE\.cargo\bin\cargo.exe" install cargo-llvm-cov` を再実行してください。
 - `CanvasRenderingContext2d::set_fill_style` を `&JsValue` で呼ぶと警告が出るので、`set_fill_style_str` を使う必要があります。
 - アニメーションループで `Rc<RefCell<...>>` をクロージャに渡す際は、クロージャ内で再参照する用にクローンを別途確保してください。同じ `Rc` をそのまま move すると借用チェッカーに弾かれます。
 - `_codex_env.ps1` はリポジトリに存在しないため、環境設定が必要な場合は手動でパスを設定するか `C:\Users\<user>\.cargo\bin\cargo.exe` のようにフルパスで `cargo` を呼び出してください。
