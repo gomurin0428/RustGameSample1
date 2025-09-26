@@ -2,18 +2,11 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{Context, Result, anyhow, bail, ensure};
+use anyhow::{anyhow, bail, ensure, Result};
 use serde::{Deserialize, Serialize};
-
-const EMBEDDED_PRIMARY: &str = include_str!("../../../../config/industries/primary.yaml");
-const EMBEDDED_SECONDARY: &str = include_str!("../../../../config/industries/secondary.yaml");
-const EMBEDDED_TERTIARY: &str = include_str!("../../../../config/industries/tertiary.yaml");
-const EMBEDDED_ENERGY: &str = include_str!("../../../../config/industries/energy.yaml");
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -196,51 +189,29 @@ pub struct IndustryCatalog {
 }
 
 impl IndustryCatalog {
-    pub fn load_from_dir<P: AsRef<Path>>(dir: P) -> Result<Self> {
-        let path = dir.as_ref();
-        if !path.exists() {
-            return Err(anyhow!(
-                "産業定義ディレクトリが存在しません: {}",
-                path.display()
-            ));
-        }
-
-        let mut catalog = IndustryCatalog::default();
-        for entry in fs::read_dir(path).context("産業定義の読み込みに失敗しました")?
-        {
-            let entry = entry?;
-            let entry_path = entry.path();
-            if !is_yaml_file(&entry_path) {
-                continue;
-            }
-            let content = fs::read_to_string(&entry_path).with_context(|| {
-                format!("ファイルの読み込みに失敗しました: {}", entry_path.display())
-            })?;
-            let file: CategoryFile = serde_yaml::from_str(&content).with_context(|| {
-                format!(
-                    "産業定義 YAML の解析に失敗しました: {}",
-                    entry_path.display()
-                )
-            })?;
-            catalog.merge_category(file, &entry_path)?;
-        }
-        Ok(catalog)
+    pub(crate) fn insert_definition(
+        &mut self,
+        category: IndustryCategory,
+        definition: SectorDefinition,
+    ) -> Result<()> {
+        let id = definition.id(category);
+        self.insert_sector(id, definition)
     }
 
-    pub fn from_embedded() -> Result<Self> {
-        let mut catalog = IndustryCatalog::default();
-        let sources = [
-            ("primary", EMBEDDED_PRIMARY),
-            ("secondary", EMBEDDED_SECONDARY),
-            ("tertiary", EMBEDDED_TERTIARY),
-            ("energy", EMBEDDED_ENERGY),
-        ];
-        for (name, content) in sources {
-            let file: CategoryFile = serde_yaml::from_str(content)
-                .with_context(|| format!("組み込み産業定義の解析に失敗しました: {}", name))?;
-            catalog.merge_category(file, Path::new(name))?;
+    pub(crate) fn insert_sector(
+        &mut self,
+        id: SectorId,
+        definition: SectorDefinition,
+    ) -> Result<()> {
+        if self.sectors.contains_key(&id) {
+            return Err(anyhow!(
+                "セクター定義が重複しています: {} ({})",
+                id.key,
+                id.category
+            ));
         }
-        Ok(catalog)
+        self.sectors.insert(id, definition);
+        Ok(())
     }
 
     pub fn sectors(&self) -> impl Iterator<Item = (&SectorId, &SectorDefinition)> {
@@ -260,19 +231,8 @@ impl IndustryCatalog {
         self.sectors.get(id)
     }
 
-    fn merge_category(&mut self, file: CategoryFile, path: &Path) -> Result<()> {
-        for sector in file.sectors {
-            let id = sector.id(file.category);
-            if self.sectors.contains_key(&id) {
-                return Err(anyhow!(
-                    "セクター定義が重複しています: {} ({})",
-                    id.key,
-                    path.display()
-                ));
-            }
-            self.sectors.insert(id, sector);
-        }
-        Ok(())
+    pub fn get_mut(&mut self, id: &SectorId) -> Option<&mut SectorDefinition> {
+        self.sectors.get_mut(id)
     }
 }
 
@@ -360,6 +320,10 @@ impl IndustryRuntime {
     }
 
     pub fn simulate_tick(&mut self, minutes: f64, scale: f64) -> IndustryTickOutcome {
+        if scale <= 0.0 {
+            return IndustryTickOutcome::default();
+        }
+
         let mut outcome = IndustryTickOutcome::default();
         const ORDER: [IndustryCategory; 4] = [
             IndustryCategory::Energy,
@@ -543,50 +507,8 @@ impl IndustryRuntime {
         })
     }
 
-    fn compute_dependency_effects(
-        category: IndustryCategory,
-        def: &SectorDefinition,
-        metrics: &HashMap<SectorId, SectorMetrics>,
-    ) -> (f64, f64, f64) {
-        let mut input_factor = 1.0;
-        let mut cost_factor = 1.0;
-        let mut demand_signal = 0.0;
-        for dep in &def.dependencies {
-            let dep_id = dep.resolve_sector(category);
-            let supply_ratio = metrics
-                .get(&dep_id)
-                .map(|m| {
-                    let requirement = dep.requirement.max(0.01);
-                    (m.output / (def.base_output * requirement)).clamp(0.0, 2.0)
-                })
-                .unwrap_or(0.0);
-            match dep.dependency {
-                DependencyKind::Input => {
-                    let shortage = (0.8 - supply_ratio).max(0.0);
-                    let surplus = (supply_ratio - 1.2).max(0.0);
-                    input_factor *= (1.0 - shortage).clamp(0.0, 1.0);
-                    if surplus > 0.0 {
-                        input_factor *= 1.0 + (surplus.min(0.5) * 0.05);
-                    }
-                }
-                DependencyKind::Cost => {
-                    let adjustment = 1.0 - dep.elasticity * (supply_ratio - 1.0);
-                    cost_factor *= adjustment.clamp(0.5, 1.5);
-                }
-                DependencyKind::Demand => {
-                    demand_signal += dep.elasticity * (supply_ratio - 1.0);
-                }
-            }
-        }
-        (input_factor.max(0.0), cost_factor.max(0.1), demand_signal)
-    }
-
     pub fn metrics(&self) -> &HashMap<SectorId, SectorMetrics> {
         &self.last_metrics
-    }
-
-    pub fn catalog(&self) -> &IndustryCatalog {
-        &self.catalog
     }
 
     pub fn energy_cost_index(&self) -> f64 {
@@ -614,88 +536,9 @@ fn sigmoid_price(signal: f64, sensitivity: f64) -> f64 {
     (1.0 + sensitivity * centered).clamp(0.2, 2.5)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CategoryFile {
-    pub category: IndustryCategory,
-    #[serde(default)]
-    pub sectors: Vec<SectorDefinition>,
-}
-
-fn is_yaml_file(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|s| s.to_str()),
-        Some("yaml" | "yml")
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn category_file_deserialises() {
-        let yaml = r#"
-category: primary
-sectors:
-  - key: wheat
-    name: 小麦
-    base_output: 120
-    base_cost: 35
-    dependencies:
-      - sector: electricity
-        category: energy
-        requirement: 0.25
-        dependency: cost
-  - key: vegetables
-    name: 野菜
-"#;
-        let file: CategoryFile = serde_yaml::from_str(yaml).expect("YAML を解析");
-        assert_eq!(file.category, IndustryCategory::Primary);
-        assert_eq!(file.sectors.len(), 2);
-        let wheat = &file.sectors[0];
-        assert_eq!(wheat.key, "wheat");
-        assert_eq!(wheat.dependencies.len(), 1);
-        assert!(matches!(
-            wheat.dependencies[0].dependency,
-            DependencyKind::Cost
-        ));
-    }
-
-    #[test]
-    fn catalog_rejects_duplicates() {
-        let mut catalog = IndustryCatalog::default();
-        let category = CategoryFile {
-            category: IndustryCategory::Primary,
-            sectors: vec![SectorDefinition {
-                key: "wheat".into(),
-                name: "小麦".into(),
-                description: None,
-                base_output: 100.0,
-                base_cost: 40.0,
-                price_sensitivity: 0.5,
-                employment: 100.0,
-                dependencies: Vec::new(),
-            }],
-        };
-        catalog
-            .merge_category(category, Path::new("inline"))
-            .expect("初回登録");
-        let duplicate = CategoryFile {
-            category: IndustryCategory::Primary,
-            sectors: vec![SectorDefinition {
-                key: "wheat".into(),
-                name: "小麦".into(),
-                description: None,
-                base_output: 120.0,
-                base_cost: 45.0,
-                price_sensitivity: 0.6,
-                employment: 110.0,
-                dependencies: Vec::new(),
-            }],
-        };
-        let result = catalog.merge_category(duplicate, Path::new("inline"));
-        assert!(result.is_err());
-    }
 
     #[test]
     fn energy_supply_reduces_cost_index() {
@@ -710,45 +553,46 @@ sectors:
     fn dependency_shortage_reduces_output() {
         let mut catalog = IndustryCatalog::default();
         let energy_id = SectorId::new(IndustryCategory::Energy, "electricity");
-        catalog.sectors.insert(
-            energy_id.clone(),
-            SectorDefinition {
-                key: "electricity".into(),
-                name: "電力".into(),
-                description: None,
-                base_output: 200.0,
-                base_cost: 80.0,
-                price_sensitivity: 0.3,
-                employment: 90.0,
-                dependencies: Vec::new(),
-            },
-        );
-        let auto_id = SectorId::new(IndustryCategory::Secondary, "automotive");
-        catalog.sectors.insert(
-            auto_id.clone(),
-            SectorDefinition {
-                key: "automotive".into(),
-                name: "自動車".into(),
-                description: None,
-                base_output: 150.0,
-                base_cost: 120.0,
-                price_sensitivity: 0.4,
-                employment: 110.0,
-                dependencies: vec![SectorDependency {
-                    sector: "electricity".into(),
-                    category: Some(IndustryCategory::Energy),
-                    requirement: 1.5,
-                    elasticity: 0.0,
-                    dependency: DependencyKind::Input,
-                }],
-            },
-        );
+        catalog
+            .insert_definition(
+                IndustryCategory::Energy,
+                SectorDefinition {
+                    key: "electricity".into(),
+                    name: "電力".into(),
+                    description: None,
+                    base_output: 200.0,
+                    base_cost: 80.0,
+                    price_sensitivity: 0.3,
+                    employment: 90.0,
+                    dependencies: Vec::new(),
+                },
+            )
+            .expect("insert electricity");
+        let auto_def = SectorDefinition {
+            key: "automotive".into(),
+            name: "自動車".into(),
+            description: None,
+            base_output: 150.0,
+            base_cost: 120.0,
+            price_sensitivity: 0.4,
+            employment: 110.0,
+            dependencies: vec![SectorDependency {
+                sector: "electricity".into(),
+                category: Some(IndustryCategory::Energy),
+                requirement: 1.5,
+                elasticity: 0.0,
+                dependency: DependencyKind::Input,
+            }],
+        };
+        catalog
+            .insert_definition(IndustryCategory::Secondary, auto_def)
+            .expect("insert automotive");
 
         let mut baseline_runtime = IndustryRuntime::from_catalog(catalog.clone());
         let baseline_output = baseline_runtime
             .simulate_tick(60.0, 1.0)
             .sector_metrics
-            .get(&auto_id)
+            .get(&SectorId::new(IndustryCategory::Secondary, "automotive"))
             .expect("baseline automotive metrics")
             .output;
 
@@ -757,7 +601,7 @@ sectors:
         let shortage_output = shortage_runtime
             .simulate_tick(60.0, 1.0)
             .sector_metrics
-            .get(&auto_id)
+            .get(&SectorId::new(IndustryCategory::Secondary, "automotive"))
             .expect("shortage automotive metrics")
             .output;
         assert!(
@@ -769,10 +613,8 @@ sectors:
     #[test]
     fn demand_signal_adjusts_price() {
         let mut catalog = IndustryCatalog::from_embedded().expect("catalog");
-        if let Some(def) = catalog
-            .sectors
-            .get_mut(&SectorId::new(IndustryCategory::Tertiary, "finance"))
-        {
+        let finance_id = SectorId::new(IndustryCategory::Tertiary, "finance");
+        if let Some(def) = catalog.get_mut(&finance_id) {
             def.dependencies.push(SectorDependency {
                 sector: "automotive".into(),
                 category: Some(IndustryCategory::Secondary),
@@ -783,7 +625,6 @@ sectors:
         }
         let mut runtime = IndustryRuntime::from_catalog(catalog);
         let outcome = runtime.simulate_tick(60.0, 1.0);
-        let finance_id = SectorId::new(IndustryCategory::Tertiary, "finance");
         let metrics = outcome
             .sector_metrics
             .get(&finance_id)
