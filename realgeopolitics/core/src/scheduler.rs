@@ -164,7 +164,7 @@ impl Scheduler {
             ready.push(task);
         }
 
-        let mut immediate_ready = Vec::new();
+        let mut postponed = Vec::new();
         while let Some(task) = self.immediate_queue.pop_front() {
             if task.execute_at.minutes <= current_minutes {
                 if let Some(next_task) = task.reschedule() {
@@ -172,13 +172,41 @@ impl Scheduler {
                 }
                 ready.push(task);
             } else {
-                immediate_ready.push(task);
+                postponed.push(task);
             }
         }
-        for task in immediate_ready {
-            self.immediate_queue.push_front(task);
+        for task in postponed.into_iter() {
+            self.immediate_queue.push_back(task);
         }
 
         ready
+    }
+
+    pub fn peek_next_minutes(&self, current_minutes: u64) -> Option<u64> {
+        let immediate = self
+            .immediate_queue
+            .front()
+            .map(|task| task.execute_at.minutes);
+        let short_term = self
+            .short_term_tasks
+            .peek()
+            .map(|task| task.execute_at.minutes);
+        let long_term = self
+            .long_term_buckets
+            .iter()
+            .flat_map(|bucket| bucket.iter().map(|task| task.execute_at.minutes))
+            .min();
+
+        [immediate, short_term, long_term]
+            .into_iter()
+            .flatten()
+            .filter(|minutes| *minutes >= current_minutes)
+            .min()
+            .or_else(|| {
+                [immediate, short_term, long_term]
+                    .into_iter()
+                    .flatten()
+                    .min()
+            })
     }
 }

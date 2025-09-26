@@ -1,6 +1,9 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
-use realgeopolitics_core::{BudgetAllocation, CountryDefinition, GameState};
+use realgeopolitics_core::CountryDefinition;
+
+#[cfg(target_arch = "wasm32")]
+use realgeopolitics_core::{BudgetAllocation, GameState, TimeStatus};
 use serde_json::Error as SerdeError;
 
 #[cfg(target_arch = "wasm32")]
@@ -52,6 +55,34 @@ const DEFAULT_COUNTRIES: &str = r#"[
 
 fn load_default_definitions() -> Result<Vec<CountryDefinition>, SerdeError> {
     serde_json::from_str::<Vec<CountryDefinition>>(DEFAULT_COUNTRIES)
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+#[derive(Debug, Clone, PartialEq)]
+struct SpeedOption {
+    value: String,
+    label: String,
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn build_speed_options(speed_value: f64, presets: &[(f64, &str)]) -> Vec<SpeedOption> {
+    let mut options = presets
+        .iter()
+        .map(|(value, label)| SpeedOption {
+            value: format!("{:.2}", value),
+            label: format!("{} (x{:.2})", label, value),
+        })
+        .collect::<Vec<_>>();
+    if presets
+        .iter()
+        .all(|(value, _)| (value - speed_value).abs() > 0.01)
+    {
+        options.push(SpeedOption {
+            value: format!("{:.2}", speed_value),
+            label: format!("カスタム (x{:.2})", speed_value),
+        });
+    }
+    options
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -195,6 +226,30 @@ fn app() -> Html {
         })
     };
 
+    let on_speed_change = {
+        let game = game.clone();
+        let message = message.clone();
+        Callback::from(move |event: Event| {
+            if let Some(select) = event
+                .target()
+                .and_then(|target| target.dyn_into::<HtmlSelectElement>().ok())
+            {
+                match select.value().parse::<f64>() {
+                    Ok(multiplier) => {
+                        if let Err(err) = game.borrow_mut().set_time_multiplier(multiplier) {
+                            message.set(Some(err.to_string()));
+                        } else {
+                            message.set(None);
+                        }
+                    }
+                    Err(_) => {
+                        message.set(Some("時間倍率は数値で指定してください。".to_string()));
+                    }
+                }
+            }
+        })
+    };
+
     let update_slider = {
         let game = game.clone();
         let forms = allocation_forms.clone();
@@ -226,7 +281,19 @@ fn app() -> Html {
     };
 
     let countries_snapshot = game.borrow();
+    let status: TimeStatus = countries_snapshot.time_status();
     let countries = countries_snapshot.countries();
+    let sim_minutes = status.simulation_minutes;
+    let calendar = status.calendar;
+    let next_event = status
+        .next_event_in_minutes
+        .map(|m| format!("{:.1} 分", m as f64))
+        .unwrap_or_else(|| "未定".to_string());
+    let speed_value = status.time_multiplier;
+    let speed_value_str = format!("{:.2}", speed_value);
+    let speed_presets: &[(f64, &str)] =
+        &[(0.5, "低速"), (1.0, "標準"), (2.0, "高速"), (4.0, "超高速")];
+    let speed_options = build_speed_options(speed_value, speed_presets);
     let current_idx = (*selected_country).min(countries.len().saturating_sub(1));
     let current_allocation = allocation_forms
         .get(current_idx)
@@ -264,15 +331,33 @@ fn app() -> Html {
         Html::default()
     };
 
+    let speed_option_nodes: Vec<Html> = speed_options
+        .iter()
+        .enumerate()
+        .map(|(idx, option)| {
+            html! {
+                <option key={idx.to_string()} value={option.value.clone()}>{ option.label.clone() }</option>
+            }
+        })
+        .collect();
+
     html! {
         <div class="app" data-refresh={(*refresh).to_string()}>
             <header>
-                <div>
+                <div class="time-panel">
                     <h1>{ "リアル・ジオポリティクス シミュレーター" }</h1>
-                    <p>{ format!("シミュレーション時間 {:.1} 分", countries_snapshot.simulation_minutes()) }</p>
+                    <p>{ format!("シミュレーション時間 {:.1} 分 (日付 {:04}-{:02}-{:02})", sim_minutes, calendar.year, calendar.month, calendar.day) }</p>
+                    <p>{ format!("次イベントまで: {}", next_event) }</p>
                 </div>
                 <div class="summary">
                     <span>{ "監視中の国家数: " }{ countries.len() }</span>
+                    <span>{ format!("時間倍率: x{:.2}", speed_value) }</span>
+                    <label class="speed-control">
+                        { "速度" }
+                        <select onchange={on_speed_change.clone()} value={speed_value_str.clone()}>
+                            { for speed_option_nodes.iter().cloned() }
+                        </select>
+                    </label>
                 </div>
             </header>
 
@@ -407,4 +492,25 @@ pub fn start() -> Result<(), JsValue> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start() {
     panic!("realgeopolitics-web は wasm32-unknown-unknown ターゲットでのみ利用できます。");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_speed_options_appends_custom_when_needed() {
+        let presets = [(0.5, "低速"), (1.0, "標準"), (2.0, "高速")];
+        let options = build_speed_options(1.7, &presets);
+        assert!(options.iter().any(|opt| opt.label.contains("カスタム")));
+        assert_eq!(options.last().map(|opt| opt.value.as_str()), Some("1.70"));
+    }
+
+    #[test]
+    fn build_speed_options_omits_custom_when_matching() {
+        let presets = [(0.5, "低速"), (1.0, "標準"), (2.0, "高速")];
+        let options = build_speed_options(1.0, &presets);
+        assert!(!options.iter().any(|opt| opt.label.contains("カスタム")));
+        assert_eq!(options.len(), presets.len());
+    }
 }

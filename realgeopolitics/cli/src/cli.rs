@@ -85,8 +85,18 @@ fn dispatch_command(game: &mut GameState, input: &str) -> Result<()> {
             let minutes: f64 = minutes
                 .parse()
                 .map_err(|_| anyhow!("分数は数値で指定してください。"))?;
+            let multiplier = game.time_multiplier();
             let reports = game.tick_minutes(minutes)?;
-            print_reports(minutes, reports);
+            print_reports(minutes * multiplier, reports);
+            Ok(())
+        }
+        "speed" => {
+            let token = parts
+                .next()
+                .ok_or_else(|| anyhow!("新しい時間倍率を指定してください。"))?;
+            let multiplier = parse_speed(token)?;
+            game.set_time_multiplier(multiplier)?;
+            println!("時間倍率を x{:.2} に設定しました。", game.time_multiplier());
             Ok(())
         }
         "quit" | "exit" => {
@@ -101,6 +111,7 @@ fn print_intro(game: &GameState) {
     println!("リアル・ジオポリティクス シミュレーター (リアルタイム版) へようこそ。");
     println!("現在 {} ヶ国が監視対象です。", game.countries().len());
     println!("help で利用可能なコマンド一覧を確認できます。");
+    println!("speed コマンドで時間倍率を slow/normal/fast などに変更できます。");
 }
 
 fn print_help() {
@@ -109,10 +120,21 @@ fn print_help() {
     println!("  inspect <国>          選択した国の詳細と外交関係を表示");
     println!("  set <国> <i> <m> <w> <d>   予算配分を百分率で設定 (合計100%以内)");
     println!("  tick <分>             指定した分だけシミュレーションを進める");
+    println!("  speed <倍率|slow|normal|fast>  時間倍率を変更");
     println!("  quit                  終了");
 }
 
 fn print_overview(game: &GameState) {
+    let next_event = game
+        .next_event_minutes()
+        .map(|m| format!("{:.1} 分", m as f64))
+        .unwrap_or_else(|| "未定".to_string());
+    println!(
+        "シミュレーション時間: {:.1} 分 (倍率 x{:.2}) / 次イベントまで: {}",
+        game.simulation_minutes(),
+        game.time_multiplier(),
+        next_event
+    );
     println!(
         "ID | {:<18} | {:<22} | {:>9} | {:>4} | {:>4} | {:>4} | {:>9} | alloc(i/m/w/d)",
         "国名", "政体", "GDP", "安定", "軍事", "支持", "予算"
@@ -180,6 +202,24 @@ fn parse_percentage(value: Option<&str>, label: &str) -> Result<f64> {
         .map_err(|_| anyhow!("{}予算は数値で指定してください。", label))?;
     ensure!(percent >= 0.0, "{}予算は0以上で指定してください。", label);
     Ok(percent)
+}
+
+fn parse_speed(token: &str) -> Result<f64> {
+    let lower = token.to_ascii_lowercase();
+    let multiplier = match lower.as_str() {
+        "slow" | "low" => 0.5,
+        "normal" | "std" | "standard" => 1.0,
+        "fast" | "high" => 2.0,
+        "max" => 4.0,
+        _ => token
+            .parse::<f64>()
+            .map_err(|_| anyhow!("時間倍率は slow/normal/fast もしくは数値で指定してください。"))?,
+    };
+    ensure!(
+        multiplier.is_finite() && multiplier > 0.0,
+        "時間倍率は正の有限値で指定してください。"
+    );
+    Ok(multiplier)
 }
 
 fn print_reports(minutes: f64, reports: Vec<String>) {

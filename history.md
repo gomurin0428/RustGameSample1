@@ -12,3 +12,4 @@
 - 2025-09-26 11:04:35 スケジューラ実装に対応するユニットテストを追加し、`ScheduledTask::execute` の各タスク種別と `Scheduler` の動作を検証。再度 `cargo test --workspace --exclude realgeopolitics-web` と `cargo build -p realgeopolitics-web --target wasm32-unknown-unknown` を実行して成功を確認。
 - 2025-09-26 11:13:59 スケジューラの優先度管理を拡張し、長期タスクをバケット圧縮する `Scheduler` ロジックと対応テストを追加。`cargo test --workspace --exclude realgeopolitics-web` と `cargo build -p realgeopolitics-web --target wasm32-unknown-unknown` を再実行して成功を確認。
 - 2025-09-26 11:20:21 スケジューラに `ScheduleSpec` を導入し、繰り返しタスクの再登録とバケット昇格をユニットテスト付きで実装。`cargo test --workspace --exclude realgeopolitics-web` および `cargo build -p realgeopolitics-web --target wasm32-unknown-unknown` を再実行し成功を確認。
+- 2025-09-26 11:44:08 realgeopolitics フェーズ1 UI連携を実装。core に TimeStatus を追加し、Web GUI で日付・次イベント表示と時間倍率セレクタ (低速/標準/高速/超高速/カスタム) を提供、速度オプションのユニットテストと TROUBLESHOOTING 更新を実施。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` を実行し成功を確認。

@@ -113,9 +113,18 @@ pub struct GameState {
     clock: GameClock,
     calendar: CalendarDate,
     day_progress_minutes: u32,
+    time_multiplier: f64,
     rng: StdRng,
     scheduler: Scheduler,
     countries: Vec<CountryState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TimeStatus {
+    pub simulation_minutes: f64,
+    pub calendar: CalendarDate,
+    pub next_event_in_minutes: Option<u64>,
+    pub time_multiplier: f64,
 }
 
 impl GameState {
@@ -175,6 +184,7 @@ impl GameState {
             clock: GameClock::new(),
             calendar: CalendarDate::from_start(),
             day_progress_minutes: 0,
+            time_multiplier: 1.0,
             rng,
             scheduler,
             countries,
@@ -195,6 +205,35 @@ impl GameState {
 
     pub fn calendar_date(&self) -> CalendarDate {
         self.calendar
+    }
+
+    pub fn time_multiplier(&self) -> f64 {
+        self.time_multiplier
+    }
+
+    pub fn set_time_multiplier(&mut self, multiplier: f64) -> Result<()> {
+        ensure!(
+            multiplier.is_finite() && multiplier > 0.0,
+            "時間倍率は正の有限値で指定してください"
+        );
+        self.time_multiplier = multiplier.clamp(0.1, 5.0);
+        Ok(())
+    }
+
+    pub fn next_event_minutes(&self) -> Option<u64> {
+        let current = self.clock.total_minutes();
+        self.scheduler
+            .peek_next_minutes(current)
+            .map(|next| next.saturating_sub(current))
+    }
+
+    pub fn time_status(&self) -> TimeStatus {
+        TimeStatus {
+            simulation_minutes: self.simulation_minutes(),
+            calendar: self.calendar,
+            next_event_in_minutes: self.next_event_minutes(),
+            time_multiplier: self.time_multiplier,
+        }
     }
 
     pub fn countries(&self) -> &[CountryState] {
@@ -239,26 +278,38 @@ impl GameState {
         ensure!(minutes.is_finite(), "時間が不正です");
         ensure!(minutes > 0.0, "時間は正の値で指定してください");
 
-        let advanced_minutes = self.clock.advance_minutes(minutes);
+        let effective_minutes = minutes * self.time_multiplier;
+
+        let advanced_minutes = self.clock.advance_minutes(effective_minutes);
         self.update_calendar(advanced_minutes);
 
-        let scale = minutes / BASE_TICK_MINUTES;
+        let scale = effective_minutes / BASE_TICK_MINUTES;
         let mut reports = Vec::new();
 
         let ready_tasks = self.scheduler.next_ready_tasks(&self.clock);
         if ready_tasks.is_empty() {
             reports.push(format!(
                 "{:.1} 分経過しましたが、スケジュールされた処理はありません。",
-                minutes
+                effective_minutes
             ));
         } else {
             for task in ready_tasks {
                 let mut task_reports = task.execute(self, scale);
-                if task_reports.is_empty() {
-                    continue;
+                if !task_reports.is_empty() {
+                    reports.append(&mut task_reports);
                 }
-                reports.append(&mut task_reports);
             }
+        }
+
+        for idx in 0..self.countries.len() {
+            let mut country_reports = self.apply_budget_effects(idx, scale);
+            if let Some(event_report) = self.trigger_random_event(idx, scale) {
+                country_reports.push(event_report);
+            }
+            if let Some(drift_report) = self.apply_economic_drift(idx, scale) {
+                country_reports.push(drift_report);
+            }
+            reports.extend(country_reports);
         }
 
         Ok(reports)
@@ -808,5 +859,32 @@ mod tests {
             .copied()
             .unwrap();
         assert!(relation < 90);
+    }
+
+    #[test]
+    fn time_multiplier_scales_tick_minutes() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 7).unwrap();
+        game.set_time_multiplier(2.0).unwrap();
+        game.tick_minutes(60.0).unwrap();
+        assert!(game.simulation_minutes() >= 119.0);
+    }
+
+    #[test]
+    fn time_status_reflects_clock_and_next_event() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 8).unwrap();
+        game.set_time_multiplier(2.5).unwrap();
+        game.tick_minutes(30.0).unwrap();
+        let status = game.time_status();
+        assert!(status.simulation_minutes >= 74.0);
+        assert!(status.next_event_in_minutes.is_some());
+        assert_eq!(status.time_multiplier, 2.5);
+        assert_eq!(status.calendar.day, 1);
+    }
+
+    #[test]
+    fn next_event_minutes_reports_difference() {
+        let game = GameState::from_definitions_with_seed(sample_definitions(), 9).unwrap();
+        let next = game.next_event_minutes().unwrap();
+        assert!(next > 0);
     }
 }

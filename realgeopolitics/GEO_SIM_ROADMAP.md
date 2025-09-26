@@ -45,7 +45,7 @@ Eversim 社の *Geo-Political Simulator* 系列を意識し、本プロジェク
 - [x] **タスク種別**: `EconomicTick`, `EventTrigger`, `PolicyResolution`, `DiplomaticPulse` を列挙体で定義し、`ScheduledTask::execute(&mut GameState, scale)` で処理を実装済み。
 - [x] **優先度付き挿入**: 近い未来のタスクを `BinaryHeap` で優先度管理し、長期タスクは `VecDeque` に保持。メモリ節約のため、1年先以降のタスクは圧縮される実装を導入済み。
 - [x] **繰り返しタスク**: `ScheduleSpec` により毎時/毎日/毎週などの再登録を実装済み。タスク実行後に自動的に次回スケジュールを登録。
-- **UI 連携**: `GameClock` の現在値と次回イベント時刻を GUI に公開。プレイヤーは「高速」「標準」「低速」などの時間倍率を変更できるよう、`tick_minutes` を倍率対応に拡張。
+- [x] **UI 連携**: `TimeStatus` でゲーム時間と次イベント予測を公開し、GUI は日付・残り時間・速度選択 (低速/標準/高速/超高速/カスタム) を常時表示。時間倍率は即時反映され、`tick_minutes` は倍率付きで進行。
 
 #### 2. 拡張財政モデル
 - **収支勘定**: 各国に `FiscalAccount` を追加し、`revenues`, `expenses`, `debt`, `interest_rate`, `credit_rating` を保持。収支項目はタグ付き構造体 (`RevenueSource`, `ExpenseItem`) で管理。

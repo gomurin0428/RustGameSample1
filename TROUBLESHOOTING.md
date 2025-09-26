@@ -10,3 +10,4 @@
 - `realgeopolitics` の CLI 版を起動する際は `config/countries.json` が必須です。ファイルが存在しない・JSON が壊れている場合は即座にエラー終了します。国を追加する時も JSON の配列構造と各フィールド名を崩さないよう注意してください。
 - ブラウザ版 (`realgeopolitics-web`) をビルドするには Rust の `wasm32-unknown-unknown` ターゲットと `trunk` コマンドが必要です。`cargo build -p realgeopolitics-web --target wasm32-unknown-unknown` で wasm のテストビルドができます。`trunk serve` を使う際は `realgeopolitics/web` ディレクトリで実行してください。
 - CLI 版で `set` コマンドを使う場合、合計が 100% を超えるとエラーになります。配分を細かく調整したいときは複数回に分けて設定するか、最初に大きめに下げてから増やしてください。Web 版は自動で正規化しますが意図しない縮小が入るので注意してください。
+- Web 版の時間倍率セレクタは内部的に小数点第2位で丸めた値を表示します。CLI 側で 1.333 など細かい倍率を設定した直後は「カスタム」項目が追加されて 1.33 として選択されるので、厳密な値を維持したい場合は CLI から再調整してください。
