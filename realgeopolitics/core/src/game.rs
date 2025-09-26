@@ -623,6 +623,7 @@ impl ScheduledTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheduler::ONE_YEAR_MINUTES;
 
     fn sample_definitions() -> Vec<CountryDefinition> {
         serde_json::from_str::<Vec<CountryDefinition>>(
@@ -695,6 +696,10 @@ mod tests {
         let mut scheduler = Scheduler::new();
         scheduler.schedule(ScheduledTask::new(TaskKind::EconomicTick, 5));
         scheduler.schedule(ScheduledTask::new(TaskKind::EventTrigger, 120));
+        scheduler.schedule(ScheduledTask::new(
+            TaskKind::PolicyResolution,
+            ONE_YEAR_MINUTES + 120,
+        ));
 
         let clock = GameClock::new();
         let ready_now = scheduler.next_ready_tasks(&clock);
@@ -706,6 +711,14 @@ mod tests {
         let ready_later = scheduler.next_ready_tasks(&later_clock);
         assert_eq!(ready_later.len(), 1);
         assert_eq!(ready_later[0].kind, TaskKind::EventTrigger);
+
+        later_clock.advance_minutes((ONE_YEAR_MINUTES + 240) as f64);
+        let ready_after_year = scheduler.next_ready_tasks(&later_clock);
+        assert!(
+            ready_after_year
+                .iter()
+                .any(|task| task.kind == TaskKind::PolicyResolution)
+        );
     }
 
     #[test]
