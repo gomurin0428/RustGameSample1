@@ -171,3 +171,136 @@ pub(crate) fn update_energy_cost_index(baseline_output: f64, energy_output_total
         (baseline_output / energy_output_total).clamp(0.5, 1.6)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    use crate::game::economy::industry::model::{
+        DependencyKind, IndustryCatalog, SectorDefinition, SectorDependency, SectorId,
+        SectorMetrics, SectorState,
+    };
+
+    #[test]
+    fn price_from_gap_handles_non_finite_signal() {
+        assert_eq!(price_from_gap(f64::NAN, 0.8), 1.0);
+        let infinite_price = price_from_gap(f64::INFINITY, 0.8);
+        assert!(infinite_price.is_finite());
+        assert!(infinite_price >= 1.0 && infinite_price <= 2.8);
+        let negative_price = price_from_gap(f64::NEG_INFINITY, 0.8);
+        assert!(negative_price.is_finite());
+        assert!(negative_price >= 0.3 && negative_price <= 1.0);
+    }
+
+    #[test]
+    fn evaluate_dependency_impacts_uses_state_fallbacks() {
+        let mut catalog = IndustryCatalog::default();
+        let energy_def = SectorDefinition {
+            key: "energy".into(),
+            name: "エネルギー".into(),
+            description: None,
+            base_output: 100.0,
+            base_cost: 80.0,
+            price_sensitivity: 0.4,
+            employment: 50.0,
+            dependencies: Vec::new(),
+        };
+        catalog
+            .insert_definition(IndustryCategory::Energy, energy_def.clone())
+            .expect("insert energy");
+
+        let manufacturing_def = SectorDefinition {
+            key: "manufacturing".into(),
+            name: "製造".into(),
+            description: None,
+            base_output: 120.0,
+            base_cost: 90.0,
+            price_sensitivity: 0.5,
+            employment: 80.0,
+            dependencies: vec![SectorDependency {
+                sector: "energy".into(),
+                category: Some(IndustryCategory::Energy),
+                requirement: 1.2,
+                elasticity: 0.6,
+                dependency: DependencyKind::Input,
+            }],
+        };
+
+        let energy_id = SectorId::new(IndustryCategory::Energy, "energy");
+        let mut states = HashMap::new();
+        let mut energy_state = SectorState::from_definition(&energy_def, IndustryCategory::Energy);
+        energy_state.last_output = 50.0;
+        energy_state.inventory = 80.0;
+        states.insert(energy_id.clone(), energy_state);
+
+        let metrics: HashMap<SectorId, SectorMetrics> = HashMap::new();
+        let impact = evaluate_dependency_impacts(
+            IndustryCategory::Secondary,
+            &manufacturing_def,
+            &metrics,
+            &states,
+        );
+        assert!(impact.input_availability > 0.9);
+        assert!(impact.cost_multiplier <= 1.0);
+    }
+
+    #[test]
+    fn evaluate_dependency_impacts_combines_demand_signals() {
+        let mut catalog = IndustryCatalog::default();
+        let service_def = SectorDefinition {
+            key: "services".into(),
+            name: "サービス".into(),
+            description: None,
+            base_output: 150.0,
+            base_cost: 60.0,
+            price_sensitivity: 0.45,
+            employment: 95.0,
+            dependencies: Vec::new(),
+        };
+        catalog
+            .insert_definition(IndustryCategory::Tertiary, service_def.clone())
+            .expect("insert services");
+
+        let finance_def = SectorDefinition {
+            key: "finance".into(),
+            name: "金融".into(),
+            description: None,
+            base_output: 140.0,
+            base_cost: 85.0,
+            price_sensitivity: 0.5,
+            employment: 90.0,
+            dependencies: vec![SectorDependency {
+                sector: "services".into(),
+                category: Some(IndustryCategory::Tertiary),
+                requirement: 0.8,
+                elasticity: 1.4,
+                dependency: DependencyKind::Demand,
+            }],
+        };
+
+        let service_id = SectorId::new(IndustryCategory::Tertiary, "services");
+        let mut metrics = HashMap::new();
+        metrics.insert(
+            service_id.clone(),
+            SectorMetrics {
+                output: 120.0,
+                revenue: 0.0,
+                cost: 0.0,
+                sales: 100.0,
+                demand: 220.0,
+                inventory: 0.0,
+                unmet_demand: 40.0,
+            },
+        );
+
+        let states: HashMap<SectorId, SectorState> = HashMap::new();
+        let impact = evaluate_dependency_impacts(
+            IndustryCategory::Tertiary,
+            &finance_def,
+            &metrics,
+            &states,
+        );
+        assert!(impact.demand_multiplier > 1.0);
+    }
+}

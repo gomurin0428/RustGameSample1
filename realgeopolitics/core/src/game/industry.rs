@@ -147,6 +147,44 @@ mod tests {
     }
 
     #[test]
+    fn distribute_outcome_preserves_totals() {
+        let catalog = IndustryCatalog::from_embedded().expect("catalog");
+        let runtime = IndustryRuntime::from_catalog(catalog);
+        let engine = IndustryEngine::new(runtime);
+
+        let mut countries = vec![
+            sample_country("Asteria"),
+            sample_country("Borealis"),
+            sample_country("Cygnus"),
+        ];
+        let baseline: Vec<(f64, f64, f64)> = countries
+            .iter()
+            .map(|c| (c.total_revenue(), c.total_expense(), c.gdp))
+            .collect();
+
+        let mut outcome = IndustryTickOutcome::default();
+        outcome.total_revenue = 360.0;
+        outcome.total_cost = 90.0;
+        outcome.total_gdp = 120.0;
+
+        engine.distribute_outcome_for_test(&outcome, &mut countries);
+
+        let mut gained_revenue = 0.0;
+        let mut gained_cost = 0.0;
+        let mut gained_gdp = 0.0;
+
+        for (idx, country) in countries.iter().enumerate() {
+            gained_revenue += country.total_revenue() - baseline[idx].0;
+            gained_cost += country.total_expense() - baseline[idx].1;
+            gained_gdp += country.gdp - baseline[idx].2;
+        }
+
+        assert!((gained_revenue - outcome.total_revenue).abs() < 1e-6);
+        assert!((gained_cost - outcome.total_cost).abs() < 1e-6);
+        assert!((gained_gdp - outcome.total_gdp).abs() < 1e-6);
+    }
+
+    #[test]
     fn apply_industry_subsidy_resolves_token() {
         let catalog = IndustryCatalog::from_embedded().expect("catalog");
         let runtime = IndustryRuntime::from_catalog(catalog);

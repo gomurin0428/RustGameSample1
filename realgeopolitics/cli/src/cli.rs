@@ -109,7 +109,8 @@ fn dispatch_command(game: &mut GameState, input: &str) -> Result<()> {
                 .map_err(|_| anyhow!("分数は数値で指定してください。"))?;
             let multiplier = game.time_multiplier();
             let reports = game.tick_minutes(minutes)?;
-            print_reports(minutes * multiplier, reports);
+            let mut stdout = io::stdout();
+            print_reports(&mut stdout, minutes * multiplier, &reports)?;
             Ok(())
         }
         "speed" => {
@@ -310,13 +311,42 @@ fn parse_speed(token: &str) -> Result<f64> {
     Ok(multiplier)
 }
 
-fn print_reports(minutes: f64, reports: Vec<String>) {
+fn print_reports<W: Write>(writer: &mut W, minutes: f64, reports: &[String]) -> Result<()> {
     if reports.is_empty() {
-        println!("{:.1} 分経過: 変化は特にありません。", minutes);
+        writeln!(writer, "{:.1} 分経過: 変化は特にありません。", minutes)?;
     } else {
-        println!("{:.1} 分経過のレポート:", minutes);
+        writeln!(writer, "{:.1} 分経過のレポート:", minutes)?;
         for report in reports {
-            println!("- {report}");
+            writeln!(writer, "- {report}")?;
         }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn print_reports_formats_industry_lines() {
+        let reports = vec![
+            "エネルギー: 生産 120.0 / 需要 110.0 / 在庫 10.0 / 未充足 0.0".to_string(),
+            "農業: 生産 80.0 / 需要 70.0 / 在庫 5.0 / 未充足 2.0".to_string(),
+        ];
+        let mut buffer = Vec::new();
+        print_reports(&mut buffer, 90.0, &reports).expect("print success");
+        let output = String::from_utf8(buffer).expect("utf8");
+        assert!(output.contains("90.0 分経過のレポート"));
+        assert!(output.contains("- エネルギー: 生産 120.0 / 需要 110.0 / 在庫 10.0 / 未充足 0.0"));
+        assert!(output.contains("- 農業: 生産 80.0 / 需要 70.0 / 在庫 5.0 / 未充足 2.0"));
+    }
+
+    #[test]
+    fn print_reports_handles_empty_list() {
+        let mut buffer = Vec::new();
+        let reports: Vec<String> = Vec::new();
+        print_reports(&mut buffer, 30.0, &reports).expect("print success");
+        let output = String::from_utf8(buffer).expect("utf8");
+        assert_eq!("30.0 分経過: 変化は特にありません。\n", output);
     }
 }
