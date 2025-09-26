@@ -198,8 +198,7 @@ impl CountryState {
         &mut self.tax_policy
     }
 
-    #[cfg(test)]
-    pub fn fiscal_mut(&mut self) -> &mut FiscalAccount {
+    pub(crate) fn fiscal_mut(&mut self) -> &mut FiscalAccount {
         &mut self.fiscal
     }
 }
