@@ -1,8 +1,7 @@
 use std::io::{self, BufRead, Write};
 
 use anyhow::{Context, Result, anyhow, bail};
-
-use crate::game::{Action, GameState};
+use realgeopolitics_core::{Action, GameState};
 
 pub fn run(game: &mut GameState) -> Result<()> {
     print_intro(game);
@@ -172,7 +171,7 @@ fn print_country_details(game: &GameState, idx: usize) {
     }
 
     println!("外交関係:");
-    let mut relations: Vec<_> = country.relations.iter().collect();
+    let mut relations: Vec<_> = country.relations().iter().collect();
     relations.sort_by(|a, b| a.0.cmp(b.0));
     for (partner, value) in relations {
         println!("  - {:<20}: {:>4}", partner, value);

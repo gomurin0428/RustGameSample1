@@ -1,0 +1,10 @@
+[package]
+name = "realgeopolitics-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+rand = { workspace = true }
+realgeopolitics-core = { path = "../core" }
+serde_json = { workspace = true }

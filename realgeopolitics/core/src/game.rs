@@ -1,25 +1,21 @@
 use std::collections::HashMap;
-use std::io::Read;
 
 use anyhow::{Result, anyhow, bail, ensure};
-use rand::Rng;
 use rand::rngs::StdRng;
-use serde::Deserialize;
+use rand::{Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
-use rand::SeedableRng;
-
-#[derive(Debug, Deserialize)]
-struct CountryDefinition {
-    name: String,
-    government: String,
-    population_millions: f64,
-    gdp: f64,
-    stability: i32,
-    military: i32,
-    approval: i32,
-    budget: f64,
-    resources: i32,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CountryDefinition {
+    pub name: String,
+    pub government: String,
+    pub population_millions: f64,
+    pub gdp: f64,
+    pub stability: i32,
+    pub military: i32,
+    pub approval: i32,
+    pub budget: f64,
+    pub resources: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +36,10 @@ pub struct CountryState {
 impl CountryState {
     pub fn planned_action(&self) -> Option<&Action> {
         self.planned_action.as_ref()
+    }
+
+    pub fn relations(&self) -> &HashMap<String, i32> {
+        &self.relations
     }
 
     fn set_planned_action(&mut self, action: Option<Action>) {
@@ -82,11 +82,17 @@ pub struct GameState {
 }
 
 impl GameState {
-    pub fn from_reader<R: Read>(reader: R, rng: StdRng) -> Result<Self> {
-        let definitions: Vec<CountryDefinition> = serde_json::from_reader(reader)?;
+    pub fn from_definitions(definitions: Vec<CountryDefinition>) -> Result<Self> {
+        Self::from_definitions_with_rng(definitions, StdRng::from_entropy())
+    }
+
+    pub fn from_definitions_with_rng(
+        definitions: Vec<CountryDefinition>,
+        rng: StdRng,
+    ) -> Result<Self> {
         ensure!(
             !definitions.is_empty(),
-            "国が1つも定義されていません。config/countries.json に最低1件の国を定義してください。"
+            "国が1つも定義されていません。最低1件の国を用意してください。"
         );
 
         let mut countries: Vec<CountryState> = definitions
@@ -116,16 +122,19 @@ impl GameState {
     }
 
     #[cfg(test)]
-    pub fn from_reader_with_seed<R: Read>(reader: R, seed: u64) -> Result<Self> {
-        Self::from_reader(reader, StdRng::seed_from_u64(seed))
-    }
-
-    pub fn countries(&self) -> &[CountryState] {
-        &self.countries
+    pub fn from_definitions_with_seed(
+        definitions: Vec<CountryDefinition>,
+        seed: u64,
+    ) -> Result<Self> {
+        Self::from_definitions_with_rng(definitions, StdRng::seed_from_u64(seed))
     }
 
     pub fn turn(&self) -> u32 {
         self.turn
+    }
+
+    pub fn countries(&self) -> &[CountryState] {
+        &self.countries
     }
 
     pub fn find_country_index(&self, name_or_index: &str) -> Option<usize> {
@@ -138,9 +147,7 @@ impl GameState {
         let name_lower = name_or_index.to_ascii_lowercase();
         self.countries
             .iter()
-            .enumerate()
-            .find(|(_, country)| country.name.to_ascii_lowercase() == name_lower)
-            .map(|(idx, _)| idx)
+            .position(|country| country.name.to_ascii_lowercase() == name_lower)
     }
 
     pub fn plan_action(&mut self, idx: usize, action: Action) -> Result<()> {
@@ -211,12 +218,12 @@ impl GameState {
         self.turn = self
             .turn
             .checked_add(1)
-            .expect("ターン数がオーバーフローしました");
+            .ok_or_else(|| anyhow!("ターン数がオーバーフローしました"))?;
 
         let mut reports = Vec::new();
 
         for country_index in 0..self.countries.len() {
-            let action_report = {
+            let action_report =
                 if let Some(action) = self.countries[country_index].planned_action.clone() {
                     self.resolve_action(country_index, action)?
                 } else {
@@ -224,8 +231,7 @@ impl GameState {
                         "{} はこのターンで特別な行動を行いませんでした。",
                         self.countries[country_index].name
                     )
-                }
-            };
+                };
             self.countries[country_index].set_planned_action(None);
             reports.push(action_report);
 
@@ -233,33 +239,12 @@ impl GameState {
                 reports.push(event_report);
             }
 
-            let drift_report = self.apply_economic_drift(country_index);
-            if let Some(drift_text) = drift_report {
+            if let Some(drift_text) = self.apply_economic_drift(country_index) {
                 reports.push(drift_text);
             }
         }
 
         Ok(reports)
-    }
-
-    #[cfg(test)]
-    pub fn relation_between(&self, idx_a: usize, idx_b: usize) -> Result<i32> {
-        let country_a = self
-            .countries
-            .get(idx_a)
-            .ok_or_else(|| anyhow!("指定された国の番号が無効です: {}", idx_a + 1))?;
-        let country_b = self
-            .countries
-            .get(idx_b)
-            .ok_or_else(|| anyhow!("指定された国の番号が無効です: {}", idx_b + 1))?;
-        let relation = *country_a.relations.get(&country_b.name).ok_or_else(|| {
-            anyhow!(
-                "{} と {} の関係値が見つかりません。データが破損しています。",
-                country_a.name,
-                country_b.name
-            )
-        })?;
-        Ok(relation)
     }
 
     fn resolve_action(&mut self, idx: usize, action: Action) -> Result<String> {
@@ -362,7 +347,6 @@ impl GameState {
             (a.clone(), b.clone())
         };
 
-        // 値を更新するために二重可変借用を避ける。
         if idx_a < idx_b {
             let (left, right) = self.countries.split_at_mut(idx_b);
             let a = &mut left[idx_a];
@@ -457,8 +441,6 @@ fn initialise_relations(countries: &mut [CountryState]) {
             let name_j = countries[j].name.clone();
             countries[i].relations.insert(name_j, 50);
         }
-
-        // 自国キーは持たせない
         countries[i].relations.remove(&name_i);
     }
 }
@@ -479,52 +461,57 @@ fn clamp_resource(value: i32) -> i32 {
 mod tests {
     use super::*;
 
-    const SAMPLE_DATA: &str = r#"[
-        {
-            "name": "Asteria",
-            "government": "Republic",
-            "population_millions": 50.0,
-            "gdp": 1500.0,
-            "stability": 60,
-            "military": 55,
-            "approval": 50,
-            "budget": 400.0,
-            "resources": 70
-        },
-        {
-            "name": "Borealis",
-            "government": "Federation",
-            "population_millions": 40.0,
-            "gdp": 1300.0,
-            "stability": 55,
-            "military": 60,
-            "approval": 45,
-            "budget": 380.0,
-            "resources": 65
-        },
-        {
-            "name": "Caldoria",
-            "government": "Monarchy",
-            "population_millions": 30.0,
-            "gdp": 1000.0,
-            "stability": 50,
-            "military": 52,
-            "approval": 48,
-            "budget": 300.0,
-            "resources": 60
-        }
-    ]"#;
+    fn sample_definitions() -> Vec<CountryDefinition> {
+        serde_json::from_str::<Vec<CountryDefinition>>(
+            r#"[
+            {
+                "name": "Asteria",
+                "government": "Republic",
+                "population_millions": 50.0,
+                "gdp": 1500.0,
+                "stability": 60,
+                "military": 55,
+                "approval": 50,
+                "budget": 400.0,
+                "resources": 70
+            },
+            {
+                "name": "Borealis",
+                "government": "Federation",
+                "population_millions": 40.0,
+                "gdp": 1300.0,
+                "stability": 55,
+                "military": 60,
+                "approval": 45,
+                "budget": 380.0,
+                "resources": 65
+            },
+            {
+                "name": "Caldoria",
+                "government": "Monarchy",
+                "population_millions": 30.0,
+                "gdp": 1000.0,
+                "stability": 50,
+                "military": 52,
+                "approval": 48,
+                "budget": 300.0,
+                "resources": 60
+            }
+        ]"#,
+        )
+        .unwrap()
+    }
 
     #[test]
-    fn loads_countries_from_json() {
-        let game = GameState::from_reader_with_seed(SAMPLE_DATA.as_bytes(), 1).unwrap();
+    fn loads_countries() {
+        let game = GameState::from_definitions_with_seed(sample_definitions(), 1).unwrap();
         assert_eq!(game.countries().len(), 3);
         assert_eq!(game.countries()[0].relations.len(), 2);
     }
 
     #[test]
     fn infrastructure_improves_gdp_and_consumes_budget() {
-        let mut game = GameState::from_reader_with_seed(SAMPLE_DATA.as_bytes(), 2).unwrap();
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 2).unwrap();
         let before_gdp = game.countries()[0].gdp;
         let before_budget = game.countries()[0].budget;
         game.plan_action(0, Action::Infrastructure).unwrap();
@@ -536,8 +523,12 @@ mod tests {
 
     #[test]
     fn diplomacy_updates_relations_for_both_countries() {
-        let mut game = GameState::from_reader_with_seed(SAMPLE_DATA.as_bytes(), 3).unwrap();
-        let before = game.relation_between(0, 1).unwrap();
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 3).unwrap();
+        let before = game.countries()[0]
+            .relations()
+            .get("Borealis")
+            .copied()
+            .unwrap();
         game.plan_action(
             0,
             Action::Diplomacy {
@@ -546,8 +537,16 @@ mod tests {
         )
         .unwrap();
         game.advance_turn().unwrap();
-        let after_a_to_b = game.relation_between(0, 1).unwrap();
-        let after_b_to_a = game.relation_between(1, 0).unwrap();
+        let after_a_to_b = game.countries()[0]
+            .relations()
+            .get("Borealis")
+            .copied()
+            .unwrap();
+        let after_b_to_a = game.countries()[1]
+            .relations()
+            .get("Asteria")
+            .copied()
+            .unwrap();
         assert!(after_a_to_b > before);
         assert!(after_b_to_a > before);
     }
