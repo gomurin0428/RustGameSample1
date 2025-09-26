@@ -166,4 +166,44 @@ mod tests {
         let engine = IndustryEngine::new(runtime);
         assert!(engine.metrics().is_empty());
     }
+
+    #[test]
+    fn simulate_tick_with_non_positive_scale_keeps_state() {
+        let catalog = IndustryCatalog::from_embedded().expect("catalog");
+        let runtime = IndustryRuntime::from_catalog(catalog);
+        let mut engine = IndustryEngine::new(runtime);
+        let mut countries = vec![sample_country("Asteria")];
+        let baseline = countries.clone();
+
+        let outcome = engine.simulate_tick(60.0, 0.0, countries.as_mut_slice());
+        assert!(outcome.total_revenue.abs() < f64::EPSILON);
+        assert!(outcome.total_cost.abs() < f64::EPSILON);
+        assert!(outcome.total_gdp.abs() < f64::EPSILON);
+        assert!(outcome.reports.is_empty());
+
+        let country = &countries[0];
+        let base = &baseline[0];
+        assert!((country.total_revenue() - base.total_revenue()).abs() < f64::EPSILON);
+        assert!((country.total_expense() - base.total_expense()).abs() < f64::EPSILON);
+        assert!((country.gdp - base.gdp).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn apply_industry_subsidy_rejects_invalid_percent() {
+        let catalog = IndustryCatalog::from_embedded().expect("catalog");
+        let runtime = IndustryRuntime::from_catalog(catalog);
+        let mut engine = IndustryEngine::new(runtime);
+        let mut countries = vec![sample_country("Asteria")];
+        engine.simulate_tick(60.0, 1.0, countries.as_mut_slice());
+
+        let err_negative = engine
+            .apply_industry_subsidy("energy:electricity", -10.0)
+            .expect_err("negative percent must be rejected");
+        assert!(err_negative.to_string().contains("0%以上"));
+
+        let err_nan = engine
+            .apply_industry_subsidy("energy:electricity", f64::NAN)
+            .expect_err("NaN percent must be rejected");
+        assert!(err_nan.to_string().contains("有限"));
+    }
 }
