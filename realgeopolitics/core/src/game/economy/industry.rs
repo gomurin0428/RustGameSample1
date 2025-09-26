@@ -292,12 +292,18 @@ pub struct IndustryRuntime {
     states: HashMap<SectorId, SectorState>,
     modifiers: HashMap<SectorId, SectorModifier>,
     last_metrics: HashMap<SectorId, SectorMetrics>,
+    energy_baseline_output: f64,
+    energy_cost_index: f64,
 }
 
 impl IndustryRuntime {
     pub fn from_catalog(catalog: IndustryCatalog) -> Self {
         let mut states = HashMap::new();
+        let mut energy_baseline = 0.0;
         for (id, def) in catalog.sectors() {
+            if id.category == IndustryCategory::Energy {
+                energy_baseline += def.base_output;
+            }
             states.insert(id.clone(), SectorState::from_definition(def, id.category));
         }
         Self {
@@ -305,6 +311,8 @@ impl IndustryRuntime {
             states,
             modifiers: HashMap::new(),
             last_metrics: HashMap::new(),
+            energy_baseline_output: energy_baseline.max(1.0),
+            energy_cost_index: 1.0,
         }
     }
 
@@ -316,6 +324,7 @@ impl IndustryRuntime {
             IndustryCategory::Secondary,
             IndustryCategory::Tertiary,
         ];
+        let mut energy_output_total = 0.0;
         for category in ORDER {
             let sector_ids: Vec<SectorId> = self
                 .catalog
@@ -327,7 +336,7 @@ impl IndustryRuntime {
                     Some(def) => def,
                     None => continue,
                 };
-                let (input_factor, cost_factor, demand_factor) =
+                let (input_factor, cost_factor_raw, demand_signal) =
                     Self::compute_dependency_effects(category, def, &outcome.sector_metrics);
                 let state_entry = self
                     .states
@@ -337,16 +346,23 @@ impl IndustryRuntime {
                     .modifiers
                     .entry(sector_id.clone())
                     .or_insert_with(SectorModifier::default);
+
                 let subsidy = modifier.subsidy_bonus.clamp(0.0, 0.9);
                 let efficiency =
                     (state_entry.efficiency * (1.0 + modifier.efficiency_bonus)).max(0.1);
 
-                let output = def.base_output * efficiency * input_factor.max(0.0) * scale;
+                let input_factor = input_factor.max(0.0);
+                let mut cost_factor = cost_factor_raw;
+                if category != IndustryCategory::Energy {
+                    cost_factor *= self.energy_cost_index;
+                }
+                let output = def.base_output * efficiency * input_factor * scale;
                 let mut cost = def.base_cost * cost_factor * scale * (1.0 - subsidy);
                 if cost.is_nan() || cost.is_infinite() || cost < 0.0 {
                     cost = 0.0;
                 }
-                let price = def.base_cost * (1.0 + def.price_sensitivity * demand_factor).max(0.1);
+                let price_multiplier = sigmoid_price(demand_signal, def.price_sensitivity);
+                let price = (def.base_cost * price_multiplier).max(0.1);
                 let revenue = output * price;
                 let gdp_contrib = (revenue - cost).max(0.0);
 
@@ -354,6 +370,10 @@ impl IndustryRuntime {
                 state_entry.subsidy_rate = subsidy;
                 state_entry.efficiency = (state_entry.efficiency * 0.95) + (efficiency * 0.05);
                 modifier.decay(minutes);
+
+                if category == IndustryCategory::Energy {
+                    energy_output_total += output;
+                }
 
                 let metrics = SectorMetrics {
                     output,
@@ -374,6 +394,14 @@ impl IndustryRuntime {
                     ));
                 }
             }
+
+            if category == IndustryCategory::Energy {
+                self.energy_cost_index = if energy_output_total <= f64::EPSILON {
+                    1.5
+                } else {
+                    (self.energy_baseline_output / energy_output_total).clamp(0.5, 1.6)
+                };
+            }
         }
         self.last_metrics = outcome.sector_metrics.clone();
         outcome
@@ -386,7 +414,7 @@ impl IndustryRuntime {
     ) -> (f64, f64, f64) {
         let mut input_factor = 1.0;
         let mut cost_factor = 1.0;
-        let mut demand_factor = 1.0;
+        let mut demand_signal = 0.0;
         for dep in &def.dependencies {
             let dep_id = dep.resolve_sector(category);
             let supply_ratio = metrics
@@ -398,23 +426,23 @@ impl IndustryRuntime {
                 .unwrap_or(0.0);
             match dep.dependency {
                 DependencyKind::Input => {
-                    input_factor *= supply_ratio.clamp(0.0, 1.2);
+                    let shortage = (0.8 - supply_ratio).max(0.0);
+                    let surplus = (supply_ratio - 1.2).max(0.0);
+                    input_factor *= (1.0 - shortage).clamp(0.0, 1.0);
+                    if surplus > 0.0 {
+                        input_factor *= 1.0 + (surplus.min(0.5) * 0.05);
+                    }
                 }
                 DependencyKind::Cost => {
                     let adjustment = 1.0 - dep.elasticity * (supply_ratio - 1.0);
                     cost_factor *= adjustment.clamp(0.5, 1.5);
                 }
                 DependencyKind::Demand => {
-                    let adjustment = 1.0 + dep.elasticity * (supply_ratio - 1.0);
-                    demand_factor *= adjustment.clamp(0.5, 1.5);
+                    demand_signal += dep.elasticity * (supply_ratio - 1.0);
                 }
             }
         }
-        (
-            input_factor.max(0.0),
-            cost_factor.max(0.1),
-            demand_factor.max(0.5),
-        )
+        (input_factor.max(0.0), cost_factor.max(0.1), demand_signal)
     }
 
     pub fn metrics(&self) -> &HashMap<SectorId, SectorMetrics> {
@@ -424,6 +452,16 @@ impl IndustryRuntime {
     pub fn catalog(&self) -> &IndustryCatalog {
         &self.catalog
     }
+
+    pub fn energy_cost_index(&self) -> f64 {
+        self.energy_cost_index
+    }
+}
+
+fn sigmoid_price(signal: f64, sensitivity: f64) -> f64 {
+    let logistic = 1.0 / (1.0 + (-3.0 * signal).exp());
+    let centered = (logistic - 0.5) * 2.0;
+    (1.0 + sensitivity * centered).clamp(0.2, 2.5)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -507,5 +545,67 @@ sectors:
         };
         let result = catalog.merge_category(duplicate, Path::new("inline"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn energy_supply_reduces_cost_index() {
+        let catalog = IndustryCatalog::from_embedded().expect("catalog");
+        let mut runtime = IndustryRuntime::from_catalog(catalog);
+        let outcome = runtime.simulate_tick(60.0, 1.0);
+        assert!(outcome.total_revenue > 0.0);
+        assert!(runtime.energy_cost_index() >= 0.5);
+    }
+
+    #[test]
+    fn dependency_shortage_reduces_output() {
+        let mut catalog = IndustryCatalog::from_embedded().expect("catalog");
+        // Modify to create strong dependency effect
+        if let Some(def) = catalog
+            .sectors
+            .get_mut(&SectorId::new(IndustryCategory::Secondary, "automotive"))
+        {
+            def.dependencies
+                .retain(|dep| dep.dependency != DependencyKind::Input);
+            def.dependencies.push(SectorDependency {
+                sector: "electricity".into(),
+                category: Some(IndustryCategory::Energy),
+                requirement: 2.0,
+                elasticity: 0.0,
+                dependency: DependencyKind::Input,
+            });
+        }
+        let mut runtime = IndustryRuntime::from_catalog(catalog);
+        let outcome = runtime.simulate_tick(60.0, 1.0);
+        let auto_id = SectorId::new(IndustryCategory::Secondary, "automotive");
+        let metrics = outcome
+            .sector_metrics
+            .get(&auto_id)
+            .expect("automotive metrics");
+        assert!(metrics.output < 150.0);
+    }
+
+    #[test]
+    fn demand_signal_adjusts_price() {
+        let mut catalog = IndustryCatalog::from_embedded().expect("catalog");
+        if let Some(def) = catalog
+            .sectors
+            .get_mut(&SectorId::new(IndustryCategory::Tertiary, "finance"))
+        {
+            def.dependencies.push(SectorDependency {
+                sector: "automotive".into(),
+                category: Some(IndustryCategory::Secondary),
+                requirement: 0.5,
+                elasticity: 0.6,
+                dependency: DependencyKind::Demand,
+            });
+        }
+        let mut runtime = IndustryRuntime::from_catalog(catalog);
+        let outcome = runtime.simulate_tick(60.0, 1.0);
+        let finance_id = SectorId::new(IndustryCategory::Tertiary, "finance");
+        let metrics = outcome
+            .sector_metrics
+            .get(&finance_id)
+            .expect("finance metrics");
+        assert!(metrics.revenue >= metrics.cost);
     }
 }
