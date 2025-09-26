@@ -1,19 +1,21 @@
 use anyhow::{Result, anyhow, ensure};
+#[cfg(test)]
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 use super::{
-    BASE_TICK_MINUTES, MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES, MINUTES_PER_DAY,
+    BASE_TICK_MINUTES, MINUTES_PER_DAY,
+    bootstrap::{GameBootstrap, GameBuilder},
     country::{BudgetAllocation, CountryDefinition, CountryState},
     economy::{
-        CreditRating, ExpenseKind, FiscalAccount, FiscalSnapshot, IndustryCatalog, IndustryRuntime,
-        IndustryTickOutcome, RevenueKind, SectorOverview, TaxPolicy,
+        ExpenseKind, FiscalSnapshot, IndustryRuntime, IndustryTickOutcome, RevenueKind,
+        SectorOverview,
     },
-    event_templates::{ScriptedEventState, load_event_templates},
+    event_templates::ScriptedEventState,
     market::CommodityMarket,
     systems::{diplomacy, events, fiscal, policy},
 };
-use crate::{CalendarDate, GameClock, ScheduleSpec, ScheduledTask, Scheduler, TaskKind};
+use crate::{CalendarDate, GameClock, ScheduledTask, Scheduler};
 
 pub struct GameState {
     clock: GameClock,
@@ -39,101 +41,14 @@ pub struct TimeStatus {
 
 impl GameState {
     pub fn from_definitions(definitions: Vec<CountryDefinition>) -> Result<Self> {
-        Self::from_definitions_with_rng(definitions, StdRng::from_entropy())
+        GameBuilder::new(definitions).build()
     }
 
     pub fn from_definitions_with_rng(
         definitions: Vec<CountryDefinition>,
         rng: StdRng,
     ) -> Result<Self> {
-        ensure!(
-            !definitions.is_empty(),
-            "国が1つも定義されていません。最低1件の国を用意してください。"
-        );
-
-        let default_alloc = BudgetAllocation::default();
-
-        let mut countries: Vec<CountryState> = definitions
-            .into_iter()
-            .map(|definition| {
-                let initial_cash = definition.budget.max(0.0);
-                let inferred_rating = if definition.approval >= 65 {
-                    CreditRating::A
-                } else if definition.stability >= 60 {
-                    CreditRating::BBB
-                } else {
-                    CreditRating::BB
-                };
-                let tax_policy = definition
-                    .tax_policy
-                    .map(TaxPolicy::new)
-                    .unwrap_or_else(TaxPolicy::default);
-                CountryState::new(
-                    definition.name,
-                    definition.government,
-                    definition.population_millions,
-                    definition.gdp,
-                    clamp_metric(definition.stability),
-                    clamp_metric(definition.military),
-                    clamp_metric(definition.approval),
-                    clamp_resource(definition.resources),
-                    FiscalAccount::new(initial_cash, inferred_rating),
-                    tax_policy,
-                    default_alloc,
-                )
-            })
-            .collect();
-
-        diplomacy::initialise_relations(&mut countries);
-
-        let mut scheduler = Scheduler::new();
-        scheduler.schedule(
-            ScheduledTask::new(TaskKind::EconomicTick, BASE_TICK_MINUTES as u64)
-                .with_schedule(ScheduleSpec::EveryMinutes(BASE_TICK_MINUTES as u64)),
-        );
-        scheduler.schedule(
-            ScheduledTask::new(TaskKind::EventTrigger, (BASE_TICK_MINUTES * 4.0) as u64)
-                .with_schedule(ScheduleSpec::EveryMinutes((BASE_TICK_MINUTES * 4.0) as u64)),
-        );
-        scheduler.schedule(
-            ScheduledTask::new(TaskKind::PolicyResolution, MINUTES_PER_DAY)
-                .with_schedule(ScheduleSpec::Daily),
-        );
-        scheduler.schedule(
-            ScheduledTask::new(TaskKind::DiplomaticPulse, (BASE_TICK_MINUTES * 6.0) as u64)
-                .with_schedule(ScheduleSpec::EveryMinutes((BASE_TICK_MINUTES * 6.0) as u64)),
-        );
-
-        let event_templates = load_event_templates(countries.len())?;
-        for (idx, template) in event_templates.iter().enumerate() {
-            let mut task = ScheduledTask::new(
-                TaskKind::ScriptedEvent(idx),
-                template.initial_delay_minutes(),
-            );
-            task = task.with_schedule(ScheduleSpec::EveryMinutes(template.check_minutes()));
-            scheduler.schedule(task);
-        }
-
-        let commodity_market = CommodityMarket::new(120.0, 7.5, 0.04);
-
-        let industry_catalog = IndustryCatalog::from_embedded().unwrap_or_default();
-        let industry_runtime = IndustryRuntime::from_catalog(industry_catalog);
-
-        let mut game = Self {
-            clock: GameClock::new(),
-            calendar: CalendarDate::from_start(),
-            day_progress_minutes: 0,
-            time_multiplier: 1.0,
-            rng,
-            scheduler,
-            countries,
-            commodity_market,
-            event_templates,
-            industry_runtime,
-            fiscal_prepared: false,
-        };
-        game.capture_fiscal_history();
-        Ok(game)
+        GameBuilder::new(definitions).with_rng(rng).build()
     }
 
     #[cfg(test)]
@@ -141,7 +56,27 @@ impl GameState {
         definitions: Vec<CountryDefinition>,
         seed: u64,
     ) -> Result<Self> {
-        Self::from_definitions_with_rng(definitions, StdRng::seed_from_u64(seed))
+        GameBuilder::new(definitions)
+            .with_rng(StdRng::seed_from_u64(seed))
+            .build()
+    }
+
+    pub(crate) fn new(bootstrap: GameBootstrap) -> Self {
+        let mut game = Self {
+            clock: GameClock::new(),
+            calendar: CalendarDate::from_start(),
+            day_progress_minutes: 0,
+            time_multiplier: 1.0,
+            rng: bootstrap.rng,
+            scheduler: bootstrap.scheduler,
+            countries: bootstrap.countries,
+            commodity_market: bootstrap.commodity_market,
+            event_templates: bootstrap.event_templates,
+            industry_runtime: bootstrap.industry_runtime,
+            fiscal_prepared: false,
+        };
+        game.capture_fiscal_history();
+        game
     }
 
     pub fn simulation_minutes(&self) -> f64 {
@@ -435,14 +370,6 @@ impl GameState {
     }
 }
 
-fn clamp_metric(value: i32) -> i32 {
-    value.clamp(MIN_METRIC, MAX_METRIC)
-}
-
-fn clamp_resource(value: i32) -> i32 {
-    value.clamp(MIN_RESOURCES, MAX_RESOURCES)
-}
-
 impl ScheduledTask {
     pub fn execute(&self, game: &mut GameState, scale: f64) -> Vec<String> {
         super::systems::tasks::execute(self, game, scale)
@@ -452,6 +379,9 @@ impl ScheduledTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TaskKind;
+    use crate::game::economy::industry::{IndustryCatalog, IndustryRuntime};
+    use crate::game::economy::{CreditRating, FiscalAccount};
     use crate::game::{IndustryCategory, SectorId};
     use crate::scheduler::{ONE_YEAR_MINUTES, ScheduleSpec};
 
@@ -648,8 +578,6 @@ mod tests {
 
     #[test]
     fn energy_shortage_penalises_downstream_sectors() {
-        use crate::game::economy::industry::{IndustryCatalog, IndustryRuntime};
-
         let catalog = IndustryCatalog::from_embedded().expect("catalog");
         let auto_id = SectorId::new(IndustryCategory::Secondary, "automotive");
         let energy_id = SectorId::new(IndustryCategory::Energy, "electricity");

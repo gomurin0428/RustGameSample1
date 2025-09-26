@@ -1,3 +1,4 @@
+mod bootstrap;
 mod constants;
 pub(crate) use constants::*;
 mod country;
@@ -7,6 +8,8 @@ mod market;
 mod state;
 pub(crate) mod systems;
 
+#[allow(unused_imports)]
+pub use bootstrap::GameBuilder;
 pub use country::{BudgetAllocation, CountryDefinition, CountryState};
 #[allow(unused_imports)]
 pub use economy::{
