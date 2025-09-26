@@ -5,6 +5,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
+use crate::{CalendarDate, GameClock, Scheduler, ScheduledTask, TaskKind};
+
 const BASE_TICK_MINUTES: f64 = 60.0;
 const MAX_RELATION: i32 = 100;
 const MIN_RELATION: i32 = -100;
@@ -105,9 +107,14 @@ impl CountryState {
     }
 }
 
+const MINUTES_PER_DAY: u64 = 24 * 60;
+
 pub struct GameState {
-    simulation_minutes: f64,
+    clock: GameClock,
+    calendar: CalendarDate,
+    day_progress_minutes: u32,
     rng: StdRng,
+    scheduler: Scheduler,
     countries: Vec<CountryState>,
 }
 
@@ -146,9 +153,20 @@ impl GameState {
 
         initialise_relations(&mut countries);
 
+        let mut scheduler = Scheduler::new();
+        scheduler.schedule(
+            ScheduledTask::new(TaskKind::EconomicTick, BASE_TICK_MINUTES as u64).with_repeat(BASE_TICK_MINUTES as u64),
+        );
+        scheduler.schedule(
+            ScheduledTask::new(TaskKind::DiplomaticPulse, (BASE_TICK_MINUTES * 6.0) as u64).with_repeat((BASE_TICK_MINUTES * 6.0) as u64),
+        );
+
         Ok(Self {
-            simulation_minutes: 0.0,
+            clock: GameClock::new(),
+            calendar: CalendarDate::from_start(),
+            day_progress_minutes: 0,
             rng,
+            scheduler,
             countries,
         })
     }
@@ -162,7 +180,11 @@ impl GameState {
     }
 
     pub fn simulation_minutes(&self) -> f64 {
-        self.simulation_minutes
+        self.clock.total_minutes_f64()
+    }
+
+    pub fn calendar_date(&self) -> CalendarDate {
+        self.calendar
     }
 
     pub fn countries(&self) -> &[CountryState] {
@@ -202,9 +224,29 @@ impl GameState {
         ensure!(minutes.is_finite(), "時間が不正です");
         ensure!(minutes > 0.0, "時間は正の値で指定してください");
 
-        self.simulation_minutes += minutes;
+        let advanced_minutes = self.clock.advance_minutes(minutes);
+        self.update_calendar(advanced_minutes);
+
         let scale = minutes / BASE_TICK_MINUTES;
         let mut reports = Vec::new();
+
+        let ready_tasks = self.scheduler.next_ready_tasks(&self.clock);
+        for task in ready_tasks {
+            match task.kind {
+                TaskKind::EconomicTick => {
+                    reports.push("定期的な経済チェックを実行しました。".to_string());
+                }
+                TaskKind::EventTrigger => {
+                    reports.push("イベント判定を実行しました。".to_string());
+                }
+                TaskKind::PolicyResolution => {
+                    reports.push("政策効果を更新しました。".to_string());
+                }
+                TaskKind::DiplomaticPulse => {
+                    reports.push("外交関係を再評価しました。".to_string());
+                }
+            }
+        }
 
         for idx in 0..self.countries.len() {
             let mut country_reports = self.apply_budget_effects(idx, scale);
@@ -222,7 +264,8 @@ impl GameState {
 
     fn apply_budget_effects(&mut self, idx: usize, scale: f64) -> Vec<String> {
         let mut reports = Vec::new();
-        let allocation = self.countries[idx].allocations();
+        let allocation = self.countries[idx]
+            .allocations();
         let total_allocation = allocation.total();
 
         let revenue = {
@@ -313,6 +356,19 @@ impl GameState {
         }
 
         reports
+    }
+
+    fn update_calendar(&mut self, advanced_minutes: u64) {
+        let mut total_days = advanced_minutes / MINUTES_PER_DAY;
+        let remainder = advanced_minutes % MINUTES_PER_DAY;
+        self.day_progress_minutes += remainder as u32;
+        if self.day_progress_minutes as u64 >= MINUTES_PER_DAY {
+            total_days += (self.day_progress_minutes as u64) / MINUTES_PER_DAY;
+            self.day_progress_minutes %= MINUTES_PER_DAY as u32;
+        }
+        if total_days > 0 {
+            self.calendar.advance_days(total_days);
+        }
     }
 
     fn improve_relations(&mut self, idx: usize, scale: f64) {
