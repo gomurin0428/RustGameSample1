@@ -7,7 +7,7 @@ use super::{
     country::{BudgetAllocation, CountryDefinition, CountryState},
     economy::{
         CreditRating, ExpenseKind, FiscalAccount, FiscalSnapshot, IndustryCatalog, IndustryRuntime,
-        IndustryTickOutcome, RevenueKind, TaxPolicy,
+        IndustryTickOutcome, RevenueKind, SectorOverview, TaxPolicy,
     },
     event_templates::{ScriptedEventState, load_event_templates},
     market::CommodityMarket,
@@ -158,6 +158,15 @@ impl GameState {
 
     pub fn time_multiplier(&self) -> f64 {
         self.time_multiplier
+    }
+
+    pub fn industry_overview(&self) -> Vec<SectorOverview> {
+        self.industry_runtime.overview()
+    }
+
+    pub fn apply_industry_subsidy(&mut self, sector: &str, percent: f64) -> Result<SectorOverview> {
+        let id = self.industry_runtime.resolve_sector_token(sector)?;
+        self.industry_runtime.apply_subsidy(&id, percent)
     }
 
     pub fn set_time_multiplier(&mut self, multiplier: f64) -> Result<()> {
@@ -752,6 +761,42 @@ mod tests {
             .map(|m| m.cost)
             .unwrap_or(0.0);
         assert!(after_cost < baseline_cost);
+    }
+
+    #[test]
+    fn apply_industry_subsidy_updates_metrics() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 47).unwrap();
+        game.tick_minutes(60.0).unwrap();
+        let baseline = game.industry_overview();
+        let auto_id = SectorId::new(IndustryCategory::Secondary, "automotive");
+        let baseline_cost = baseline
+            .iter()
+            .find(|entry| entry.id == auto_id)
+            .map(|entry| entry.last_cost)
+            .unwrap_or(0.0);
+
+        let overview = game
+            .apply_industry_subsidy("energy:electricity", 45.0)
+            .expect("補助金設定");
+        assert_eq!(overview.id.category, IndustryCategory::Energy);
+        assert_eq!(overview.id.key, "electricity");
+        assert!(overview.subsidy_percent >= 44.9);
+
+        game.tick_minutes(60.0).unwrap();
+        let after = game.industry_overview();
+        let after_cost = after
+            .iter()
+            .find(|entry| entry.id == auto_id)
+            .map(|entry| entry.last_cost)
+            .unwrap_or(0.0);
+        assert!(after_cost <= baseline_cost || baseline_cost == 0.0);
+    }
+
+    #[test]
+    fn apply_industry_subsidy_rejects_unknown_sector() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 48).unwrap();
+        let result = game.apply_industry_subsidy("unknown", 10.0);
+        assert!(result.is_err());
     }
 
     #[test]

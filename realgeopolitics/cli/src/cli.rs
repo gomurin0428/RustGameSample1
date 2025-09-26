@@ -121,6 +121,38 @@ fn dispatch_command(game: &mut GameState, input: &str) -> Result<()> {
             println!("時間倍率を x{:.2} に設定しました。", game.time_multiplier());
             Ok(())
         }
+        "industry" => {
+            let sub = parts
+                .next()
+                .ok_or_else(|| {
+                    anyhow!("industry サブコマンドを指定してください (例: subsidize)。")
+                })?
+                .to_ascii_lowercase();
+            match sub.as_str() {
+                "subsidize" => {
+                    let sector_token = parts.next().ok_or_else(|| {
+                        anyhow!("セクターを category:key 形式または一意なキーで指定してください。")
+                    })?;
+                    let percent_text = parts
+                        .next()
+                        .ok_or_else(|| anyhow!("補助金割合(%)を指定してください。"))?;
+                    let percent: f64 = percent_text
+                        .parse()
+                        .map_err(|_| anyhow!("補助金割合は数値で指定してください。"))?;
+                    let overview = game.apply_industry_subsidy(sector_token, percent)?;
+                    println!(
+                        "{} ({}) に補助金 {:.1}% を設定しました。直近コスト {:.1} / 生産量 {:.1}",
+                        overview.name,
+                        overview.id.category,
+                        overview.subsidy_percent,
+                        overview.last_cost,
+                        overview.last_output
+                    );
+                    Ok(())
+                }
+                other => bail!("未知の industry サブコマンドです: {}", other),
+            }
+        }
         "quit" | "exit" => {
             println!("シミュレーションを終了します。");
             std::process::exit(0);
@@ -144,6 +176,7 @@ fn print_help() {
     println!("                       各カテゴリのGDP比率(%)を入力 (core で必須支出を優先)");
     println!("  tick <分>             指定した分だけシミュレーションを進める");
     println!("  speed <倍率|slow|normal|fast>  時間倍率を変更");
+    println!("  industry subsidize <sector> <percent>  指定セクターへ補助金(%)を設定");
     println!("  quit                  終了");
 }
 

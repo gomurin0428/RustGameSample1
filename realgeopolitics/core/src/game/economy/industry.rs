@@ -1,11 +1,13 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::str::FromStr;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 const EMBEDDED_PRIMARY: &str = include_str!("../../../../config/industries/primary.yaml");
@@ -13,7 +15,7 @@ const EMBEDDED_SECONDARY: &str = include_str!("../../../../config/industries/sec
 const EMBEDDED_TERTIARY: &str = include_str!("../../../../config/industries/tertiary.yaml");
 const EMBEDDED_ENERGY: &str = include_str!("../../../../config/industries/energy.yaml");
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum IndustryCategory {
     Primary,
@@ -31,6 +33,36 @@ impl IndustryCategory {
             IndustryCategory::Energy,
         ]
         .into_iter()
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IndustryCategory::Primary => "primary",
+            IndustryCategory::Secondary => "secondary",
+            IndustryCategory::Tertiary => "tertiary",
+            IndustryCategory::Energy => "energy",
+        }
+    }
+}
+
+impl fmt::Display for IndustryCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl FromStr for IndustryCategory {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let normalized = s.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "primary" | "一次" | "1" => Ok(IndustryCategory::Primary),
+            "secondary" | "二次" | "2" => Ok(IndustryCategory::Secondary),
+            "tertiary" | "三次" | "3" => Ok(IndustryCategory::Tertiary),
+            "energy" | "エネルギー" | "4" => Ok(IndustryCategory::Energy),
+            other => bail!("未知の産業カテゴリです: {}", other),
+        }
     }
 }
 
@@ -277,6 +309,17 @@ pub struct SectorMetrics {
     pub cost: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct SectorOverview {
+    pub id: SectorId,
+    pub name: String,
+    pub category: IndustryCategory,
+    pub subsidy_percent: f64,
+    pub last_output: f64,
+    pub last_revenue: f64,
+    pub last_cost: f64,
+}
+
 #[derive(Debug, Default)]
 pub struct IndustryTickOutcome {
     pub total_revenue: f64,
@@ -405,6 +448,99 @@ impl IndustryRuntime {
         }
         self.last_metrics = outcome.sector_metrics.clone();
         outcome
+    }
+
+    pub fn resolve_sector_token(&self, token: &str) -> Result<SectorId> {
+        let raw = token.trim();
+        ensure!(!raw.is_empty(), "セクターを指定してください。");
+        let mut splits = raw.split(|c| c == ':' || c == '/');
+        let first = splits.next().expect("split は少なくとも1要素");
+        if let Some(second) = splits.next() {
+            let category = IndustryCategory::from_str(first)?;
+            let key = second.trim();
+            ensure!(!key.is_empty(), "セクターキーが空です。");
+            let id = SectorId::new(category, key);
+            ensure!(
+                self.catalog.get(&id).is_some(),
+                "指定されたセクターは存在しません: {}",
+                raw
+            );
+            return Ok(id);
+        }
+
+        let mut matches = self
+            .catalog
+            .sectors()
+            .filter(|(id, _)| id.key.eq_ignore_ascii_case(raw))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.category.cmp(&b.category));
+        match matches.len() {
+            0 => bail!("セクターが見つかりません: {}", raw),
+            1 => Ok(matches.remove(0)),
+            _ => bail!(
+                "セクター名が複数カテゴリに存在します: {} (category:key 形式で指定してください)",
+                raw
+            ),
+        }
+    }
+
+    pub fn apply_subsidy(&mut self, id: &SectorId, percent: f64) -> Result<SectorOverview> {
+        ensure!(self.catalog.get(id).is_some(), "セクターが存在しません。");
+        ensure!(
+            percent.is_finite(),
+            "補助率は有限の数値で指定してください。"
+        );
+        ensure!(percent >= 0.0, "補助率は0%以上で指定してください。");
+        let ratio = (percent / 100.0).clamp(0.0, 0.9);
+        let modifier = self.modifiers.entry(id.clone()).or_default();
+        modifier.subsidy_bonus = ratio;
+        modifier.remaining_minutes = f64::MAX;
+        if let Some(state) = self.states.get_mut(id) {
+            state.subsidy_rate = ratio;
+        }
+        self.overview_for(id)
+    }
+
+    pub fn overview(&self) -> Vec<SectorOverview> {
+        let mut entries = Vec::new();
+        for (id, def) in self.catalog.sectors() {
+            let state = self.states.get(id);
+            let metrics = self.last_metrics.get(id);
+            entries.push(SectorOverview {
+                id: id.clone(),
+                name: def.name.clone(),
+                category: id.category,
+                subsidy_percent: state.map(|s| s.subsidy_rate * 100.0).unwrap_or(0.0),
+                last_output: metrics.map(|m| m.output).unwrap_or(0.0),
+                last_revenue: metrics.map(|m| m.revenue).unwrap_or(0.0),
+                last_cost: metrics.map(|m| m.cost).unwrap_or(0.0),
+            });
+        }
+        entries.sort_by(|a, b| {
+            a.category
+                .cmp(&b.category)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        entries
+    }
+
+    pub fn overview_for(&self, id: &SectorId) -> Result<SectorOverview> {
+        let def = self
+            .catalog
+            .get(id)
+            .ok_or_else(|| anyhow!("セクターが存在しません: {}: {}", id.category, id.key))?;
+        let state = self.states.get(id);
+        let metrics = self.last_metrics.get(id);
+        Ok(SectorOverview {
+            id: id.clone(),
+            name: def.name.clone(),
+            category: id.category,
+            subsidy_percent: state.map(|s| s.subsidy_rate * 100.0).unwrap_or(0.0),
+            last_output: metrics.map(|m| m.output).unwrap_or(0.0),
+            last_revenue: metrics.map(|m| m.revenue).unwrap_or(0.0),
+            last_cost: metrics.map(|m| m.cost).unwrap_or(0.0),
+        })
     }
 
     fn compute_dependency_effects(

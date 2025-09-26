@@ -29,3 +29,4 @@
 - 2025-09-26 16:21:42 一次〜三次産業およびエネルギーセクター拡張の仕様と導入計画を GEO_SIM_ROADMAP.md に追加し、データ構造・依存関係・政策 UI までの段階的実装ステップを整理。
 - 2025-09-26 16:31:55 `core::game::economy::industry` モジュールと `config/industries/*.yaml` を新設。セクター/依存関係/カタログ読み込みのデータ構造を定義し、`cargo fmt` → `cargo test --workspace` を実行して正常終了を確認。
 - 2025-09-26 17:41:24 realgeopolitics-core の産業依存テストを安定化。入力不足検証は専用カタログを構築して再現性を確保し、エネルギー不足はコスト増を確認する形に更新。`C:\\Users\\gomur\\.cargo\\bin\\cargo.exe test -p realgeopolitics-core` と `pwsh ./coverage.ps1` を実行して全テスト成功とカバレッジ生成を確認。
+- 2025-09-26 18:41:45 realgeopolitics の産業政策インターフェースを拡張。CLI に `industry subsidize` を追加し、コアの `GameState` へ補助金適用 API を実装。Web 版には「産業」タブとセクター別スライダー＋棒／折れ線 KPI グラフを追加し、`C\\Users\\gomur\\.cargo\\bin\\cargo.exe test --workspace` と `C\\Users\\gomur\\.cargo\\bin\\cargo.exe build -p realgeopolitics-web --target wasm32-unknown-unknown` を実行して動作確認。

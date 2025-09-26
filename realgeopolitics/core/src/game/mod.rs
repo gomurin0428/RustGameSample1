@@ -11,6 +11,7 @@ pub use country::{BudgetAllocation, CountryDefinition, CountryState};
 #[allow(unused_imports)]
 pub use economy::{
     DependencyKind, FiscalSnapshot, FiscalTrendPoint, IndustryCatalog, IndustryCategory,
-    SectorDefinition, SectorDependency, SectorId, SectorState, TaxPolicy, TaxPolicyConfig,
+    SectorDefinition, SectorDependency, SectorId, SectorOverview, SectorState, TaxPolicy,
+    TaxPolicyConfig,
 };
 pub use state::{GameState, TimeStatus};

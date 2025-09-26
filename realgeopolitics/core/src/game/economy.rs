@@ -1,7 +1,7 @@
 pub mod industry;
 pub use industry::{
     DependencyKind, IndustryCatalog, IndustryCategory, IndustryRuntime, IndustryTickOutcome,
-    SectorDefinition, SectorDependency, SectorId, SectorState,
+    SectorDefinition, SectorDependency, SectorId, SectorOverview, SectorState,
 };
 
 use serde::{Deserialize, Serialize};

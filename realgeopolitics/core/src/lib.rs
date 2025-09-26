@@ -4,7 +4,7 @@ mod time;
 
 pub use game::{
     BudgetAllocation, CountryDefinition, CountryState, FiscalSnapshot, FiscalTrendPoint, GameState,
-    TaxPolicy, TaxPolicyConfig, TimeStatus,
+    IndustryCategory, SectorOverview, TaxPolicy, TaxPolicyConfig, TimeStatus,
 };
 pub use scheduler::{ScheduleSpec, ScheduledTask, Scheduler, TaskKind};
 pub use time::{CalendarDate, GameClock};

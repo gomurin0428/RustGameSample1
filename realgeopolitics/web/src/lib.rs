@@ -4,7 +4,8 @@ use realgeopolitics_core::CountryDefinition;
 
 #[cfg(target_arch = "wasm32")]
 use realgeopolitics_core::{
-    BudgetAllocation, FiscalSnapshot, FiscalTrendPoint, GameState, TimeStatus,
+    BudgetAllocation, FiscalSnapshot, FiscalTrendPoint, GameState, IndustryCategory,
+    SectorOverview, TimeStatus,
 };
 use serde_json::Error as SerdeError;
 
@@ -176,6 +177,7 @@ enum AllocationField {
 enum MainTab {
     Controls,
     Metrics,
+    Industry,
     Diplomacy,
 }
 
@@ -185,6 +187,7 @@ impl MainTab {
         match self {
             MainTab::Controls => "コントロール",
             MainTab::Metrics => "主要指標",
+            MainTab::Industry => "産業",
             MainTab::Diplomacy => "外交・イベント",
         }
     }
@@ -234,6 +237,7 @@ fn app() -> Html {
     let refresh = use_state(|| 0u32);
     let main_tab = use_state(|| MainTab::Controls);
     let dashboard_tab = use_state(|| DashboardTab::DebtTrend);
+    let industry_selection = use_state(String::new);
 
     {
         let game = game.clone();
@@ -375,6 +379,7 @@ fn app() -> Html {
     };
 
     let countries_snapshot = game.borrow();
+    let industry_overview = countries_snapshot.industry_overview();
     let status: TimeStatus = countries_snapshot.time_status();
     let countries = countries_snapshot.countries();
     let sim_minutes = status.simulation_minutes;
@@ -438,6 +443,20 @@ fn app() -> Html {
         })
         .unwrap_or_default();
 
+    let fallback_industry_token = industry_overview
+        .first()
+        .map(|entry| format_sector_token(entry.id.category, &entry.id.key));
+    let selected_industry_token = if (*industry_selection).is_empty() {
+        fallback_industry_token.clone()
+    } else {
+        Some((*industry_selection).clone())
+    };
+    let selected_sector_overview = selected_industry_token.as_ref().and_then(|token| {
+        industry_overview
+            .iter()
+            .find(|entry| format_sector_token(entry.id.category, &entry.id.key) == *token)
+    });
+
     let reports_view = (*reports)
         .iter()
         .enumerate()
@@ -471,6 +490,11 @@ fn app() -> Html {
         } else {
             "main-tab-button"
         };
+        let industry_class = if *main_tab == MainTab::Industry {
+            "main-tab-button active"
+        } else {
+            "main-tab-button"
+        };
         let diplomacy_class = if *main_tab == MainTab::Diplomacy {
             "main-tab-button active"
         } else {
@@ -484,6 +508,10 @@ fn app() -> Html {
             let main_tab = main_tab.clone();
             Callback::from(move |_event: MouseEvent| main_tab.set(MainTab::Metrics))
         };
+        let on_industry = {
+            let main_tab = main_tab.clone();
+            Callback::from(move |_event: MouseEvent| main_tab.set(MainTab::Industry))
+        };
         let on_diplomacy = {
             let main_tab = main_tab.clone();
             Callback::from(move |_event: MouseEvent| main_tab.set(MainTab::Diplomacy))
@@ -492,6 +520,7 @@ fn app() -> Html {
             <div class="main-tabs">
                 <button class={controls_class} onclick={on_controls}>{ MainTab::Controls.label() }</button>
                 <button class={metrics_class} onclick={on_metrics}>{ MainTab::Metrics.label() }</button>
+                <button class={industry_class} onclick={on_industry}>{ MainTab::Industry.label() }</button>
                 <button class={diplomacy_class} onclick={on_diplomacy}>{ MainTab::Diplomacy.label() }</button>
             </div>
         }
@@ -523,6 +552,184 @@ fn app() -> Html {
                 { render_amount_input("債務返済", current_allocation.debt_service, current_idx, AllocationField::DebtService, update_amount.clone()) }
                 { render_amount_input("行政維持", current_allocation.administration, current_idx, AllocationField::Administration, update_amount.clone()) }
                 { render_amount_input("研究開発", current_allocation.research, current_idx, AllocationField::Research, update_amount.clone()) }
+            </section>
+        </>
+    };
+
+    let industry_rows: Vec<Html> = industry_overview
+        .iter()
+        .enumerate()
+        .map(|(idx, overview)| {
+            let token = format_sector_token(overview.id.category, &overview.id.key);
+            let is_selected = selected_industry_token
+                .as_ref()
+                .map(|current| current == &token)
+                .unwrap_or(false);
+            let row_class = if is_selected {
+                "industry-row selected"
+            } else {
+                "industry-row"
+            };
+            let game_handle = game.clone();
+            let message_handle_slider = message.clone();
+            let refresh_handle_slider = refresh.clone();
+            let selection_handle_slider = industry_selection.clone();
+            let slider_token = token.clone();
+            let on_slider_change = Callback::from(move |event: InputEvent| {
+                if let Some(input) = event
+                    .target()
+                    .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
+                {
+                    if let Ok(value) = input.value().parse::<f64>() {
+                        match game_handle.borrow_mut().apply_industry_subsidy(&slider_token, value) {
+                            Ok(_) => {
+                                message_handle_slider.set(None);
+                                selection_handle_slider.set(slider_token.clone());
+                                let current = *refresh_handle_slider;
+                                refresh_handle_slider.set(current.wrapping_add(1));
+                            }
+                            Err(err) => message_handle_slider.set(Some(err.to_string())),
+                        }
+                    } else {
+                        message_handle_slider
+                            .set(Some("補助率は数値で指定してください。".to_string()));
+                    }
+                }
+            });
+
+            let game_handle_num = game.clone();
+            let message_handle_num = message.clone();
+            let refresh_handle_num = refresh.clone();
+            let selection_handle_num = industry_selection.clone();
+            let number_token = token.clone();
+            let on_number_change = Callback::from(move |event: Event| {
+                if let Some(input) = event
+                    .target()
+                    .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
+                {
+                    match input.value().parse::<f64>() {
+                        Ok(value) => match game_handle_num.borrow_mut().apply_industry_subsidy(&number_token, value) {
+                            Ok(_) => {
+                                message_handle_num.set(None);
+                                selection_handle_num.set(number_token.clone());
+                                let current = *refresh_handle_num;
+                                refresh_handle_num.set(current.wrapping_add(1));
+                            }
+                            Err(err) => message_handle_num.set(Some(err.to_string())),
+                        },
+                        Err(_) => message_handle_num
+                            .set(Some("補助率は数値で指定してください。".to_string())),
+                    }
+                }
+            });
+
+            let selection_handle_button = industry_selection.clone();
+            let button_token = token.clone();
+            let on_focus = Callback::from(move |_event: MouseEvent| {
+                selection_handle_button.set(button_token.clone());
+            });
+
+            html! {
+                <tr key={format!("sector-{}", idx)} class={row_class}>
+                    <td>{ display_industry_category(overview.id.category) }</td>
+                    <td>{ &overview.name }</td>
+                    <td>{ format!("{:.1}", overview.last_output) }</td>
+                    <td>{ format!("{:.1}", overview.last_revenue) }</td>
+                    <td>{ format!("{:.1}", overview.last_cost) }</td>
+                    <td>
+                        <div class="subsidy-control">
+                            <input
+                                type="range"
+                                min="0"
+                                max="90"
+                                step="1"
+                                value={format!("{:.0}", overview.subsidy_percent)}
+                                oninput={on_slider_change}
+                            />
+                            <input
+                                type="number"
+                                min="0"
+                                max="90"
+                                step="1"
+                                value={format!("{:.0}", overview.subsidy_percent)}
+                                onchange={on_number_change}
+                            />
+                            <span>{ format!("{:.1}%", overview.subsidy_percent) }</span>
+                            <button type="button" class="view-kpi" onclick={on_focus}>{ "KPI" }</button>
+                        </div>
+                    </td>
+                </tr>
+            }
+        })
+        .collect();
+
+    let selected_token_value = selected_industry_token
+        .clone()
+        .unwrap_or_else(|| fallback_industry_token.clone().unwrap_or_default());
+    let industry_chart = selected_sector_overview
+        .map(|overview| render_industry_chart(overview))
+        .unwrap_or_else(|| html! { <p>{ "セクター情報が取得できません。" }</p> });
+    let industry_summary = selected_sector_overview
+        .map(|overview| {
+            html! {
+                <div class="industry-summary">
+                    <p>{ format!("{}/{}", display_industry_category(overview.id.category), overview.name) }</p>
+                    <p>{ format!("生産量 {:.1}", overview.last_output) }</p>
+                    <p>{ format!("収益 {:.1}", overview.last_revenue) }</p>
+                    <p>{ format!("コスト {:.1}", overview.last_cost) }</p>
+                    <p>{ format!("補助金 {:.1}%", overview.subsidy_percent) }</p>
+                </div>
+            }
+        })
+        .unwrap_or_else(|| html! { <div class="industry-summary">{ "セクターを選択してください。" }</div> });
+
+    let on_industry_select = {
+        let selection_handle = industry_selection.clone();
+        Callback::from(move |event: Event| {
+            if let Some(select) = event
+                .target()
+                .and_then(|target| target.dyn_into::<HtmlSelectElement>().ok())
+            {
+                selection_handle.set(select.value());
+            }
+        })
+    };
+
+    let industry_tab_content = html! {
+        <>
+            <section class="industry-overview">
+                <h2>{ "セクター別補助金" }</h2>
+                <table class="industry-table">
+                    <thead>
+                        <tr>
+                            <th>{ "カテゴリ" }</th>
+                            <th>{ "セクター" }</th>
+                            <th>{ "生産量" }</th>
+                            <th>{ "収益" }</th>
+                            <th>{ "コスト" }</th>
+                            <th>{ "補助金" }</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        { for industry_rows }
+                    </tbody>
+                </table>
+            </section>
+            <section class="industry-kpi">
+                <h2>{ "KPI グラフ" }</h2>
+                <div class="industry-kpi-header">
+                    <label>
+                        { "表示セクター" }
+                        <select onchange={on_industry_select.clone()} value={selected_token_value}>
+                            { for industry_overview.iter().map(|overview| {
+                                let token = format_sector_token(overview.id.category, &overview.id.key);
+                                html! { <option value={token.clone()}>{ format!("{} / {}", display_industry_category(overview.id.category), overview.name) }</option> }
+                            }) }
+                        </select>
+                    </label>
+                </div>
+                { industry_summary }
+                { industry_chart }
             </section>
         </>
     };
@@ -607,6 +814,7 @@ fn app() -> Html {
     let tab_body = match *main_tab {
         MainTab::Controls => controls_tab_content,
         MainTab::Metrics => metrics_tab_content,
+        MainTab::Industry => industry_tab_content,
         MainTab::Diplomacy => diplomacy_tab_content,
     };
 
@@ -655,6 +863,94 @@ struct AllocationAmountChange {
 struct CoreMinimumChange {
     country_idx: usize,
     enabled: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn format_sector_token(category: IndustryCategory, key: &str) -> String {
+    format!("{}:{}", category, key)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn display_industry_category(category: IndustryCategory) -> &'static str {
+    match category {
+        IndustryCategory::Primary => "第一次産業",
+        IndustryCategory::Secondary => "第二次産業",
+        IndustryCategory::Tertiary => "第三次産業",
+        IndustryCategory::Energy => "エネルギー産業",
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_industry_chart(overview: &SectorOverview) -> Html {
+    let width = 360.0;
+    let height = 220.0;
+    let left_margin = 40.0;
+    let bottom = 180.0;
+    let plot_height = 140.0;
+    let bar_width = 48.0;
+    let gap = 60.0;
+
+    let cost_value = overview.last_cost.max(0.0);
+    let revenue_value = overview.last_revenue.max(0.0);
+    let output_value = overview.last_output.max(0.0);
+    let max_value = cost_value.max(revenue_value).max(output_value).max(1.0);
+
+    let cost_height = (cost_value / max_value) * plot_height;
+    let revenue_height = (revenue_value / max_value) * plot_height;
+    let output_height = (output_value / max_value) * plot_height;
+
+    let cost_x = left_margin;
+    let revenue_x = left_margin + bar_width + gap;
+    let output_x = revenue_x + bar_width + gap;
+
+    let cost_y = bottom - cost_height;
+    let revenue_y = bottom - revenue_height;
+    let output_y = bottom - output_height;
+
+    let line_path = format!(
+        "M {:.2} {:.2} L {:.2} {:.2} L {:.2} {:.2}",
+        cost_x + bar_width / 2.0,
+        cost_y,
+        revenue_x + bar_width / 2.0,
+        revenue_y,
+        output_x,
+        output_y
+    );
+
+    html! {
+        <div class="industry-chart">
+            <svg viewBox={format!("0 0 {:.0} {:.0}", width, height)} preserveAspectRatio="none">
+                <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", bottom)} x2={format!("{:.2}", width - 20.0)} y2={format!("{:.2}", bottom)} stroke="#cccccc" stroke-width="1" />
+                <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", bottom - plot_height)} x2={format!("{:.2}", left_margin)} y2={format!("{:.2}", bottom)} stroke="#cccccc" stroke-width="1" />
+                <rect
+                    x={format!("{:.2}", cost_x)}
+                    y={format!("{:.2}", cost_y)}
+                    width={format!("{:.2}", bar_width)}
+                    height={format!("{:.2}", cost_height.max(0.0))}
+                    fill="#c0392b"
+                    opacity="0.7"
+                />
+                <rect
+                    x={format!("{:.2}", revenue_x)}
+                    y={format!("{:.2}", revenue_y)}
+                    width={format!("{:.2}", bar_width)}
+                    height={format!("{:.2}", revenue_height.max(0.0))}
+                    fill="#27ae60"
+                    opacity="0.7"
+                />
+                <path d={line_path} stroke="#2e86de" stroke-width="2" fill="none" />
+                <circle cx={format!("{:.2}", output_x)} cy={format!("{:.2}", output_y)} r="5" fill="#2e86de" />
+                <text x={format!("{:.2}", cost_x + bar_width / 2.0)} y={format!("{:.2}", bottom + 18.0)} text-anchor="middle">{ "コスト" }</text>
+                <text x={format!("{:.2}", revenue_x + bar_width / 2.0)} y={format!("{:.2}", bottom + 18.0)} text-anchor="middle">{ "収益" }</text>
+                <text x={format!("{:.2}", output_x)} y={format!("{:.2}", bottom + 18.0)} text-anchor="middle">{ "生産量" }</text>
+            </svg>
+            <div class="industry-chart-legend">
+                <span class="legend-item cost">{ format!("コスト {:.1}", cost_value) }</span>
+                <span class="legend-item revenue">{ format!("収益 {:.1}", revenue_value) }</span>
+                <span class="legend-item output">{ format!("生産量 {:.1}", output_value) }</span>
+            </div>
+        </div>
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -18,6 +18,7 @@
 - FiscalAccount の収支は tick ごとにクリアされます。テストや CLI で直前 tick の収支を確認したい場合は `tick` 実行直後に `total_revenue()` / `total_expense()` を参照してください。複数 tick の履歴が必要なら別途蓄積してください。
 - `FiscalSnapshot` の履歴は `GameState::tick_minutes` および `TaskKind::EconomicTick` 経由でのみ更新されます。テストで `CountryState` を直接操作した直後に履歴を比較する場合は、必ず `tick_minutes` か `ScheduledTask::execute` を実行して履歴を更新してください。履歴が空のまま UI を描画すると `panic!` で異常終了するため、ダミーデータを手で挿入するよりゲームロジック経由で更新する方が安全です。
 - 産業シミュレーションのユニットテストで組み込みカタログ (`IndustryCatalog::from_embedded`) をそのまま使うと複数セクターの依存関係やコスト調整が絡み、期待する不足シナリオが再現できないことがあります。再現性が必要なテストでは専用の小さな `IndustryCatalog` を組み立ててから `IndustryRuntime::from_catalog` を生成してください。
+- CLI の `industry subsidize` コマンドではセクターを `category:key` 形式で指定すると確実です。キーだけ指定した場合に複数カテゴリで重複しているとエラーになるので、エネルギー電力なら `energy:electricity` のように入力してください。
 - `config/events` 配下のテンプレートはビルド時に読み込まれ、未知のメトリクス名や構文エラーがある場合は `panic!` で停止します。条件式は `stability`, `debt_ratio`, `cash_reserve` など既定の識別子と `&&`/`||`/比較演算子のみ使用してください。評価は `ScriptedEvent` タスク内で行われるため、テンプレートを追加したら `cargo test` で必ず検証してください。
 - `TaxPolicy` の税率を変更した場合、反映は次回の `tick` 実行時です。繰越税収 (`pending_revenue`) は自動で次 tick の即時収入に加算されるため、短時間で何度も切り替えると直前の繰越が期待より多く見える場合があります。
 - CommodityMarket の価格更新は `tick` ごとに行われ、ショック発生時は価格が大きく変動します。テストで安定した結果が必要な場合は `GameState::from_definitions_with_seed` を利用し、`StdRng` のシードを固定してください。
