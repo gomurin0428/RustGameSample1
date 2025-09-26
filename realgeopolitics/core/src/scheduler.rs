@@ -14,6 +14,7 @@ pub enum TaskKind {
     EventTrigger,
     PolicyResolution,
     DiplomaticPulse,
+    ScriptedEvent(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,0 +1,15 @@
+{
+  "id": "resource_boom",
+  "name": "資源ブーム",
+  "description": "資源指数が高く安定度も確保されている国で発生する好況イベント。",
+  "condition": "resources > 80 && stability >= 55",
+  "check_minutes": 240,
+  "cooldown_minutes": 1440,
+  "initial_delay_minutes": 120,
+  "effects": [
+    { "type": "adjust_metric", "metric": "gdp", "delta": 180.0 },
+    { "type": "adjust_metric", "metric": "cash_reserve", "delta": 90.0 },
+    { "type": "adjust_metric", "metric": "approval", "delta": 5 },
+    { "type": "report", "message": "{country} は資源ブームで財政が潤いました。" }
+  ]
+}

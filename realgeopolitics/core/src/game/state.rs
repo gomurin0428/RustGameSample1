@@ -8,6 +8,7 @@ use super::{
     BASE_TICK_MINUTES, MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES, MINUTES_PER_DAY,
     country::{BudgetAllocation, CountryDefinition, CountryState},
     economy::{CreditRating, FiscalAccount, FiscalSnapshot, TaxPolicy},
+    event_templates::{ScriptedEventState, load_event_templates},
     market::CommodityMarket,
     systems::{diplomacy, events, fiscal, policy},
 };
@@ -22,6 +23,7 @@ pub struct GameState {
     scheduler: Scheduler,
     countries: Vec<CountryState>,
     commodity_market: CommodityMarket,
+    event_templates: Vec<ScriptedEventState>,
     fiscal_prepared: bool,
 }
 
@@ -100,6 +102,16 @@ impl GameState {
                 .with_schedule(ScheduleSpec::EveryMinutes((BASE_TICK_MINUTES * 6.0) as u64)),
         );
 
+        let event_templates = load_event_templates(countries.len())?;
+        for (idx, template) in event_templates.iter().enumerate() {
+            let mut task = ScheduledTask::new(
+                TaskKind::ScriptedEvent(idx),
+                template.initial_delay_minutes(),
+            );
+            task = task.with_schedule(ScheduleSpec::EveryMinutes(template.check_minutes()));
+            scheduler.schedule(task);
+        }
+
         let commodity_market = CommodityMarket::new(120.0, 7.5, 0.04);
 
         let mut game = Self {
@@ -111,6 +123,7 @@ impl GameState {
             scheduler,
             countries,
             commodity_market,
+            event_templates,
             fiscal_prepared: false,
         };
         game.capture_fiscal_history();
@@ -182,6 +195,21 @@ impl GameState {
             .get(idx)
             .map(|country| country.fiscal_snapshot())
             .ok_or_else(|| anyhow!("指定された国の番号が無効です: {}", idx + 1))
+    }
+
+    pub fn scripted_event_index(&self, id: &str) -> Option<usize> {
+        let needle = id.to_ascii_lowercase();
+        self.event_templates.iter().position(|template| {
+            let id_match = template.id().to_ascii_lowercase() == needle;
+            let name_match = template.name().to_ascii_lowercase() == needle;
+            id_match || name_match
+        })
+    }
+
+    pub fn scripted_event_description(&self, id: &str) -> Option<&str> {
+        self.scripted_event_index(id)
+            .and_then(|idx| self.event_templates.get(idx))
+            .map(|template| template.description())
     }
 
     #[cfg(test)]
@@ -322,6 +350,15 @@ impl GameState {
 
     pub(crate) fn process_diplomatic_pulse(&mut self) -> Vec<String> {
         diplomacy::pulse(&mut self.countries)
+    }
+
+    pub(crate) fn process_scripted_event(&mut self, template_idx: usize) -> Vec<String> {
+        let minutes = self.clock.total_minutes_f64();
+        let template = self
+            .event_templates
+            .get_mut(template_idx)
+            .unwrap_or_else(|| panic!("無効なイベントテンプレートインデックス: {}", template_idx));
+        template.execute(&mut self.countries, minutes)
     }
 
     fn capture_fiscal_history(&mut self) {
@@ -700,5 +737,75 @@ mod tests {
         let game = GameState::from_definitions_with_seed(sample_definitions(), 12).unwrap();
         let next = game.next_event_minutes().unwrap();
         assert!(next > 0);
+    }
+
+    #[test]
+    fn scripted_event_triggers_debt_crisis() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 21).unwrap();
+        let template_idx = game
+            .scripted_event_index("debt_crisis")
+            .expect("debt_crisis テンプレートが見つかりません");
+        let description = game
+            .scripted_event_description("debt_crisis")
+            .expect("debt_crisis の説明取得に失敗しました");
+        assert!(!description.trim().is_empty());
+        {
+            let country = &mut game.countries_mut()[0];
+            country.gdp = 1600.0;
+            country.stability = 42;
+            country.approval = 58;
+            country.fiscal_mut().set_cash_reserve(280.0);
+            country.fiscal_mut().add_debt(1500.0);
+        }
+        let before = {
+            let country = &game.countries()[0];
+            (
+                country.stability,
+                country.approval,
+                country.fiscal.debt,
+                country.cash_reserve(),
+            )
+        };
+        let reports = game.process_scripted_event(template_idx);
+        assert!(reports.iter().any(|report| report.contains("債務危機")));
+        let country = &game.countries()[0];
+        assert!(country.stability < before.0);
+        assert!(country.approval < before.1);
+        assert!(country.fiscal.debt > before.2);
+        assert!(country.cash_reserve() < before.3);
+        let second_reports = game.process_scripted_event(template_idx);
+        assert!(second_reports.is_empty());
+    }
+
+    #[test]
+    fn scripted_event_triggers_resource_boom() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 22).unwrap();
+        let template_idx = game
+            .scripted_event_index("resource_boom")
+            .expect("resource_boom テンプレートが見つかりません");
+        let description = game
+            .scripted_event_description("resource_boom")
+            .expect("resource_boom の説明取得に失敗しました");
+        assert!(!description.trim().is_empty());
+        {
+            let country = &mut game.countries_mut()[1];
+            country.resources = 96;
+            country.stability = 62;
+            country.approval = 54;
+            country.gdp = 1700.0;
+            country.fiscal_mut().set_cash_reserve(320.0);
+        }
+        let before = {
+            let country = &game.countries()[1];
+            (country.gdp, country.fiscal.cash_reserve(), country.approval)
+        };
+        let reports = game.process_scripted_event(template_idx);
+        assert!(reports.iter().any(|report| report.contains("資源ブーム")));
+        let country = &game.countries()[1];
+        assert!(country.gdp > before.0);
+        assert!(country.fiscal.cash_reserve() > before.1);
+        assert!(country.approval > before.2);
+        let second_reports = game.process_scripted_event(template_idx);
+        assert!(second_reports.is_empty());
     }
 }

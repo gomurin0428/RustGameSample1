@@ -1,0 +1,23 @@
+id: debt_crisis
+name: 債務危機警報
+description: >
+  公的債務がGDPの90%を超え、安定度も低下した場合に発生する危機イベント。
+condition: "debt_ratio > 90 && stability < 45"
+check_minutes: 180
+cooldown_minutes: 1440
+initial_delay_minutes: 60
+effects:
+  - type: adjust_metric
+    metric: stability
+    delta: -6
+  - type: adjust_metric
+    metric: approval
+    delta: -8
+  - type: adjust_metric
+    metric: debt
+    delta: 150.0
+  - type: adjust_metric
+    metric: cash_reserve
+    delta: -120.0
+  - type: report
+    message: "{country} は債務危機に直面し、緊縮策が不可避になりました。"

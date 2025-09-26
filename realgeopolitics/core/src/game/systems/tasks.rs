@@ -7,5 +7,6 @@ pub(crate) fn execute(task: &ScheduledTask, game: &mut GameState, scale: f64) ->
         TaskKind::EventTrigger => game.process_event_trigger(),
         TaskKind::PolicyResolution => game.process_policy_resolution(),
         TaskKind::DiplomaticPulse => game.process_diplomatic_pulse(),
+        TaskKind::ScriptedEvent(template_idx) => game.process_scripted_event(template_idx),
     }
 }
