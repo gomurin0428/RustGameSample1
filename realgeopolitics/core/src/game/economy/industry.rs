@@ -572,30 +572,62 @@ sectors:
 
     #[test]
     fn dependency_shortage_reduces_output() {
-        let mut catalog = IndustryCatalog::from_embedded().expect("catalog");
-        // Modify to create strong dependency effect
-        if let Some(def) = catalog
-            .sectors
-            .get_mut(&SectorId::new(IndustryCategory::Secondary, "automotive"))
-        {
-            def.dependencies
-                .retain(|dep| dep.dependency != DependencyKind::Input);
-            def.dependencies.push(SectorDependency {
-                sector: "electricity".into(),
-                category: Some(IndustryCategory::Energy),
-                requirement: 2.0,
-                elasticity: 0.0,
-                dependency: DependencyKind::Input,
-            });
-        }
-        let mut runtime = IndustryRuntime::from_catalog(catalog);
-        let outcome = runtime.simulate_tick(60.0, 1.0);
+        let mut catalog = IndustryCatalog::default();
+        let energy_id = SectorId::new(IndustryCategory::Energy, "electricity");
+        catalog.sectors.insert(
+            energy_id.clone(),
+            SectorDefinition {
+                key: "electricity".into(),
+                name: "電力".into(),
+                description: None,
+                base_output: 200.0,
+                base_cost: 80.0,
+                price_sensitivity: 0.3,
+                employment: 90.0,
+                dependencies: Vec::new(),
+            },
+        );
         let auto_id = SectorId::new(IndustryCategory::Secondary, "automotive");
-        let metrics = outcome
+        catalog.sectors.insert(
+            auto_id.clone(),
+            SectorDefinition {
+                key: "automotive".into(),
+                name: "自動車".into(),
+                description: None,
+                base_output: 150.0,
+                base_cost: 120.0,
+                price_sensitivity: 0.4,
+                employment: 110.0,
+                dependencies: vec![SectorDependency {
+                    sector: "electricity".into(),
+                    category: Some(IndustryCategory::Energy),
+                    requirement: 1.5,
+                    elasticity: 0.0,
+                    dependency: DependencyKind::Input,
+                }],
+            },
+        );
+
+        let mut baseline_runtime = IndustryRuntime::from_catalog(catalog.clone());
+        let baseline_output = baseline_runtime
+            .simulate_tick(60.0, 1.0)
             .sector_metrics
             .get(&auto_id)
-            .expect("automotive metrics");
-        assert!(metrics.output < 150.0);
+            .expect("baseline automotive metrics")
+            .output;
+
+        let mut shortage_runtime = IndustryRuntime::from_catalog(catalog);
+        shortage_runtime.set_modifier_for_test(&energy_id, 0.0, -0.9, 120.0);
+        let shortage_output = shortage_runtime
+            .simulate_tick(60.0, 1.0)
+            .sector_metrics
+            .get(&auto_id)
+            .expect("shortage automotive metrics")
+            .output;
+        assert!(
+            shortage_output < baseline_output * 0.35,
+            "expected shortage output ({shortage_output}) to fall below 35% of baseline ({baseline_output})"
+        );
     }
 
     #[test]

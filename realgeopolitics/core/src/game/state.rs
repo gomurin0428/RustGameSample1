@@ -639,28 +639,39 @@ mod tests {
 
     #[test]
     fn energy_shortage_penalises_downstream_sectors() {
-        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 43).unwrap();
-        let auto_id = SectorId::new(IndustryCategory::Secondary, "automotive");
-        let mut baseline = GameState::from_definitions_with_seed(sample_definitions(), 45).unwrap();
-        baseline.tick_minutes(60.0).unwrap();
-        let baseline_output = baseline
-            .industry_runtime
-            .metrics()
-            .get(&auto_id)
-            .map(|m| m.output)
-            .unwrap_or(0.0);
+        use crate::game::economy::industry::{IndustryCatalog, IndustryRuntime};
 
+        let catalog = IndustryCatalog::from_embedded().expect("catalog");
+        let auto_id = SectorId::new(IndustryCategory::Secondary, "automotive");
         let energy_id = SectorId::new(IndustryCategory::Energy, "electricity");
-        game.industry_runtime
-            .set_modifier_for_test(&energy_id, 0.0, -0.8, 120.0);
-        game.tick_minutes(60.0).unwrap();
-        let reduced_output = game
-            .industry_runtime
-            .metrics()
+
+        let mut baseline_runtime = IndustryRuntime::from_catalog(catalog.clone());
+        let baseline_outcome = baseline_runtime.simulate_tick(60.0, 1.0);
+        let baseline_cost = baseline_outcome
+            .sector_metrics
             .get(&auto_id)
-            .map(|m| m.output)
+            .map(|m| m.cost)
             .unwrap_or(0.0);
-        assert!(reduced_output < baseline_output);
+        let baseline_cost_index = baseline_runtime.energy_cost_index();
+
+        let mut shortage_runtime = IndustryRuntime::from_catalog(catalog);
+        shortage_runtime.set_modifier_for_test(&energy_id, 0.0, -0.8, 120.0);
+        let shortage_outcome = shortage_runtime.simulate_tick(60.0, 1.0);
+        let shortage_cost = shortage_outcome
+            .sector_metrics
+            .get(&auto_id)
+            .map(|m| m.cost)
+            .unwrap_or(0.0);
+        let shortage_cost_index = shortage_runtime.energy_cost_index();
+
+        assert!(
+            shortage_cost > baseline_cost,
+            "expected higher production cost ({shortage_cost}) than baseline ({baseline_cost})"
+        );
+        assert!(
+            shortage_cost_index > baseline_cost_index,
+            "expected energy cost index ({shortage_cost_index}) to exceed baseline ({baseline_cost_index})"
+        );
     }
 
     #[test]
