@@ -155,3 +155,80 @@ fn clamp_metric(value: i32) -> i32 {
 fn clamp_resource(value: i32) -> i32 {
     value.clamp(MIN_RESOURCES, MAX_RESOURCES)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::GameClock;
+    use rand::SeedableRng;
+
+    fn sample_definitions() -> Vec<CountryDefinition> {
+        vec![
+            CountryDefinition {
+                name: "Asteria".to_string(),
+                government: "Republic".to_string(),
+                population_millions: 50.0,
+                gdp: 1500.0,
+                stability: 60,
+                military: 55,
+                approval: 50,
+                budget: 400.0,
+                resources: 70,
+                tax_policy: None,
+            },
+            CountryDefinition {
+                name: "Borealis".to_string(),
+                government: "Federation".to_string(),
+                population_millions: 40.0,
+                gdp: 1300.0,
+                stability: 55,
+                military: 60,
+                approval: 45,
+                budget: 380.0,
+                resources: 65,
+                tax_policy: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn build_rejects_empty_definition_list() {
+        let result = GameBuilder::new(Vec::new()).build();
+        let error = match result {
+            Err(err) => err,
+            Ok(_) => panic!("定義空でも GameBuilder::build が成功しました"),
+        };
+        assert!(error.to_string().contains("国が1つも定義されていません"));
+    }
+
+    #[test]
+    fn into_bootstrap_populates_all_dependencies() {
+        let builder = GameBuilder::new(sample_definitions()).with_rng(StdRng::seed_from_u64(7));
+        let bootstrap = builder.into_bootstrap().expect("bootstrap result");
+
+        let GameBootstrap {
+            mut scheduler,
+            countries,
+            event_templates,
+            commodity_market,
+            industry_runtime,
+            ..
+        } = bootstrap;
+
+        assert_eq!(countries.len(), 2);
+        assert!(!event_templates.is_empty());
+        assert!(industry_runtime.overview().len() > 0);
+        assert!(commodity_market.price() > 0.0);
+        assert!(scheduler.peek_next_minutes(0).is_some());
+
+        let mut clock = GameClock::new();
+        clock.advance_minutes(BASE_TICK_MINUTES as f64 + 0.5);
+        let ready = scheduler.next_ready_tasks(&clock);
+        assert!(
+            ready
+                .iter()
+                .any(|task| matches!(task.kind, TaskKind::EconomicTick)),
+            "EconomicTick should be scheduled at first tick"
+        );
+    }
+}
