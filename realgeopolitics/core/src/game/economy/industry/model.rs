@@ -165,18 +165,25 @@ impl SectorDefinition {
 #[derive(Debug, Clone)]
 pub struct SectorState {
     pub id: SectorId,
-    pub output: f64,
-    pub capacity: f64,
+    pub last_output: f64,
+    pub supply_capacity: f64,
+    pub potential_demand: f64,
+    pub inventory: f64,
+    pub unmet_demand: f64,
     pub subsidy_rate: f64,
     pub efficiency: f64,
 }
 
 impl SectorState {
     pub fn from_definition(def: &SectorDefinition, category: IndustryCategory) -> Self {
+        let base = def.base_output.max(0.1);
         Self {
             id: def.id(category),
-            output: def.base_output,
-            capacity: 1.0,
+            last_output: base,
+            supply_capacity: base,
+            potential_demand: base,
+            inventory: 0.0,
+            unmet_demand: 0.0,
             subsidy_rate: 0.0,
             efficiency: 1.0,
         }
@@ -267,6 +274,10 @@ pub struct SectorMetrics {
     pub output: f64,
     pub revenue: f64,
     pub cost: f64,
+    pub sales: f64,
+    pub demand: f64,
+    pub inventory: f64,
+    pub unmet_demand: f64,
 }
 
 #[derive(Debug, Clone)]

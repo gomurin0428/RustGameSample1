@@ -8,6 +8,23 @@ use super::model::{
     SectorModifier, SectorState,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DependencyImpact {
+    pub input_availability: f64,
+    pub cost_multiplier: f64,
+    pub demand_multiplier: f64,
+}
+
+impl Default for DependencyImpact {
+    fn default() -> Self {
+        Self {
+            input_availability: 1.0,
+            cost_multiplier: 1.0,
+            demand_multiplier: 1.0,
+        }
+    }
+}
+
 pub(crate) fn resolve_sector_token(catalog: &IndustryCatalog, token: &str) -> Result<SectorId> {
     let raw = token.trim();
     ensure!(!raw.is_empty(), "セクターを指定してください。");
@@ -65,48 +82,86 @@ pub(crate) fn apply_subsidy(
     Ok(())
 }
 
-pub(crate) fn compute_dependency_effects(
+pub(crate) fn evaluate_dependency_impacts(
     category: IndustryCategory,
     def: &SectorDefinition,
     metrics: &HashMap<SectorId, SectorMetrics>,
-) -> (f64, f64, f64) {
-    let mut input_factor = 1.0;
-    let mut cost_factor = 1.0;
-    let mut demand_signal = 0.0;
+    states: &HashMap<SectorId, SectorState>,
+) -> DependencyImpact {
+    let mut impact = DependencyImpact::default();
+    if def.dependencies.is_empty() {
+        return impact;
+    }
+
     for dep in &def.dependencies {
         let dep_id = dep.resolve_sector(category);
-        let supply_ratio = metrics
-            .get(&dep_id)
-            .map(|m| {
-                let requirement = dep.requirement.max(0.01);
-                (m.output / (def.base_output * requirement)).clamp(0.0, 2.0)
-            })
-            .unwrap_or(0.0);
+        let requirement = (def.base_output * dep.requirement.max(0.01)).max(0.1);
+        let dep_metrics = metrics.get(&dep_id);
+        let dep_state = states.get(&dep_id);
+
         match dep.dependency {
             DependencyKind::Input => {
-                let shortage = (0.8 - supply_ratio).max(0.0);
-                let surplus = (supply_ratio - 1.2).max(0.0);
-                input_factor *= (1.0 - shortage).clamp(0.0, 1.0);
-                if surplus > 0.0 {
-                    input_factor *= 1.0 + (surplus.min(0.5) * 0.05);
-                }
+                let available_supply = dep_metrics
+                    .map(|m| m.output + m.inventory)
+                    .or_else(|| dep_state.map(|s| s.last_output + s.inventory))
+                    .unwrap_or(0.0);
+                let ratio = if requirement <= 0.0 {
+                    1.0
+                } else {
+                    (available_supply / requirement).clamp(0.0, 2.0)
+                };
+                impact.input_availability = (impact.input_availability * ratio).clamp(0.0, 1.5);
             }
             DependencyKind::Cost => {
-                let adjustment = 1.0 - dep.elasticity * (supply_ratio - 1.0);
-                cost_factor *= adjustment.clamp(0.5, 1.5);
+                let observed_supply = dep_metrics
+                    .map(|m| m.output)
+                    .or_else(|| dep_state.map(|s| s.last_output))
+                    .unwrap_or(requirement);
+                let supply_ratio = if requirement <= 0.0 {
+                    1.0
+                } else {
+                    (observed_supply / requirement).clamp(0.1, 3.0)
+                };
+                let elasticity = dep.elasticity.clamp(-2.0, 2.0);
+                let adjustment = 1.0 - elasticity * (1.0 - supply_ratio);
+                impact.cost_multiplier = (impact.cost_multiplier * adjustment).clamp(0.4, 2.0);
             }
             DependencyKind::Demand => {
-                demand_signal += dep.elasticity * (supply_ratio - 1.0);
+                let observed_demand = dep_metrics
+                    .map(|m| m.output + m.unmet_demand)
+                    .or_else(|| dep_state.map(|s| s.last_output + s.unmet_demand))
+                    .unwrap_or(requirement);
+                let baseline = dep_state
+                    .map(|s| s.potential_demand.max(0.1))
+                    .unwrap_or(requirement.max(0.1));
+                let ratio = if baseline <= 0.0 {
+                    1.0
+                } else {
+                    (observed_demand / baseline).clamp(0.0, 3.0)
+                };
+                let elasticity = dep.elasticity.clamp(-2.5, 2.5);
+                impact.demand_multiplier =
+                    (impact.demand_multiplier * (1.0 + elasticity * (ratio - 1.0))).clamp(0.2, 3.0);
             }
         }
     }
-    (input_factor.max(0.0), cost_factor.max(0.1), demand_signal)
+
+    if impact.input_availability < 0.0 || !impact.input_availability.is_finite() {
+        impact.input_availability = 0.0;
+    }
+
+    impact
 }
 
-pub(crate) fn sigmoid_price(signal: f64, sensitivity: f64) -> f64 {
-    let logistic = 1.0 / (1.0 + (-3.0 * signal).exp());
+pub(crate) fn price_from_gap(gap_ratio: f64, sensitivity: f64) -> f64 {
+    if !gap_ratio.is_finite() {
+        return 1.0;
+    }
+    let clamp_ratio = gap_ratio.clamp(-1.5, 1.5);
+    let logistic = 1.0 / (1.0 + (-4.0 * clamp_ratio).exp());
     let centered = (logistic - 0.5) * 2.0;
-    (1.0 + sensitivity * centered).clamp(0.2, 2.5)
+    let effective_sensitivity = sensitivity.clamp(0.1, 2.5);
+    (1.0 + centered * effective_sensitivity).clamp(0.3, 2.8)
 }
 
 pub(crate) fn update_energy_cost_index(baseline_output: f64, energy_output_total: f64) -> f64 {

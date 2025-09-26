@@ -483,7 +483,11 @@ mod tests {
         let before_gdp = game.countries()[0].gdp;
         let before_cash = game.countries()[0].cash_reserve();
         let reports = game.tick_minutes(60.0).expect("tick");
-        assert!(reports.iter().any(|r| r.contains("生産量")));
+        assert!(
+            reports
+                .iter()
+                .any(|r| r.contains("生産 ") && r.contains("需要"))
+        );
         let after_gdp = game.countries()[0].gdp;
         let after_cash = game.countries()[0].cash_reserve();
         assert!(after_gdp > before_gdp);
