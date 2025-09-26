@@ -5,6 +5,8 @@ use crate::time::{GameClock, ScheduledTime};
 pub const ONE_YEAR_MINUTES: u64 = 365 * 24 * 60;
 const IMMEDIATE_THRESHOLD_MINUTES: u64 = 10;
 const COMPRESSED_BUCKET_MINUTES: u64 = 24 * 60;
+const DAY_MINUTES: u64 = 24 * 60;
+const WEEK_MINUTES: u64 = 7 * DAY_MINUTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskKind {
@@ -14,11 +16,28 @@ pub enum TaskKind {
     DiplomaticPulse,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleSpec {
+    EveryMinutes(u64),
+    Daily,
+    Weekly,
+}
+
+impl ScheduleSpec {
+    fn next_execution_minutes(&self, last_execution: u64) -> u64 {
+        match self {
+            ScheduleSpec::EveryMinutes(minutes) => last_execution + minutes,
+            ScheduleSpec::Daily => last_execution + DAY_MINUTES,
+            ScheduleSpec::Weekly => last_execution + WEEK_MINUTES,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScheduledTask {
     pub kind: TaskKind,
     pub execute_at: ScheduledTime,
-    pub repeat_every_minutes: Option<u64>,
+    pub schedule_spec: Option<ScheduleSpec>,
 }
 
 impl ScheduledTask {
@@ -26,13 +45,22 @@ impl ScheduledTask {
         Self {
             kind,
             execute_at: ScheduledTime::new(execute_at),
-            repeat_every_minutes: None,
+            schedule_spec: None,
         }
     }
 
-    pub fn with_repeat(mut self, minutes: u64) -> Self {
-        self.repeat_every_minutes = Some(minutes);
+    pub fn with_schedule(mut self, spec: ScheduleSpec) -> Self {
+        self.schedule_spec = Some(spec);
         self
+    }
+
+    fn reschedule(&self) -> Option<Self> {
+        self.schedule_spec.map(|spec| {
+            let next_minutes = spec.next_execution_minutes(self.execute_at.minutes);
+            let mut next_task = self.clone();
+            next_task.execute_at = ScheduledTime::new(next_minutes);
+            next_task
+        })
     }
 }
 
@@ -91,15 +119,20 @@ impl Scheduler {
         let elapsed_since_threshold = current_minutes - ONE_YEAR_MINUTES;
         let buckets_to_promote = (elapsed_since_threshold / COMPRESSED_BUCKET_MINUTES) as usize;
         for _ in 0..=buckets_to_promote {
-            if let Some(bucket) = self.long_term_buckets.front() {
-                let earliest_time = bucket
-                    .iter()
-                    .map(|task| task.execute_at.minutes)
-                    .min()
-                    .unwrap_or(u64::MAX);
-                if earliest_time > current_minutes {
-                    break;
-                }
+            let promote_now = self
+                .long_term_buckets
+                .front()
+                .map(|bucket| {
+                    bucket
+                        .iter()
+                        .map(|task| task.execute_at.minutes)
+                        .min()
+                        .unwrap_or(u64::MAX)
+                        <= current_minutes
+                })
+                .unwrap_or(false);
+            if !promote_now {
+                break;
             }
             if let Some(bucket) = self.long_term_buckets.pop_front() {
                 for task in bucket {
@@ -124,17 +157,26 @@ impl Scheduler {
             if task.execute_at.minutes > current_minutes {
                 break;
             }
-            if let Some(mut task) = self.short_term_tasks.pop() {
-                ready.push(task.clone());
-                if let Some(interval) = task.repeat_every_minutes {
-                    task.execute_at = ScheduledTime::new(task.execute_at.minutes + interval);
-                    self.schedule(task);
-                }
+            let task = self.short_term_tasks.pop().expect("task popped after peek");
+            if let Some(next_task) = task.reschedule() {
+                self.schedule(next_task);
             }
+            ready.push(task);
         }
 
+        let mut immediate_ready = Vec::new();
         while let Some(task) = self.immediate_queue.pop_front() {
-            ready.push(task);
+            if task.execute_at.minutes <= current_minutes {
+                if let Some(next_task) = task.reschedule() {
+                    self.schedule(next_task);
+                }
+                ready.push(task);
+            } else {
+                immediate_ready.push(task);
+            }
+        }
+        for task in immediate_ready {
+            self.immediate_queue.push_front(task);
         }
 
         ready

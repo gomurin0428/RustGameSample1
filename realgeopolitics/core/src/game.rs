@@ -5,7 +5,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
-use crate::{CalendarDate, GameClock, ScheduledTask, Scheduler, TaskKind};
+use crate::{CalendarDate, GameClock, ScheduleSpec, ScheduledTask, Scheduler, TaskKind};
 
 const BASE_TICK_MINUTES: f64 = 60.0;
 const MAX_RELATION: i32 = 100;
@@ -156,19 +156,19 @@ impl GameState {
         let mut scheduler = Scheduler::new();
         scheduler.schedule(
             ScheduledTask::new(TaskKind::EconomicTick, BASE_TICK_MINUTES as u64)
-                .with_repeat(BASE_TICK_MINUTES as u64),
+                .with_schedule(ScheduleSpec::EveryMinutes(BASE_TICK_MINUTES as u64)),
         );
         scheduler.schedule(
             ScheduledTask::new(TaskKind::EventTrigger, (BASE_TICK_MINUTES * 4.0) as u64)
-                .with_repeat((BASE_TICK_MINUTES * 4.0) as u64),
+                .with_schedule(ScheduleSpec::EveryMinutes((BASE_TICK_MINUTES * 4.0) as u64)),
         );
         scheduler.schedule(
             ScheduledTask::new(TaskKind::PolicyResolution, MINUTES_PER_DAY)
-                .with_repeat(MINUTES_PER_DAY),
+                .with_schedule(ScheduleSpec::Daily),
         );
         scheduler.schedule(
             ScheduledTask::new(TaskKind::DiplomaticPulse, (BASE_TICK_MINUTES * 6.0) as u64)
-                .with_repeat((BASE_TICK_MINUTES * 6.0) as u64),
+                .with_schedule(ScheduleSpec::EveryMinutes((BASE_TICK_MINUTES * 6.0) as u64)),
         );
 
         Ok(Self {
@@ -623,7 +623,7 @@ impl ScheduledTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheduler::ONE_YEAR_MINUTES;
+    use crate::scheduler::{ONE_YEAR_MINUTES, ScheduleSpec};
 
     fn sample_definitions() -> Vec<CountryDefinition> {
         serde_json::from_str::<Vec<CountryDefinition>>(
@@ -701,7 +701,8 @@ mod tests {
             ONE_YEAR_MINUTES + 120,
         ));
 
-        let clock = GameClock::new();
+        let mut clock = GameClock::new();
+        clock.advance_minutes(5.0);
         let ready_now = scheduler.next_ready_tasks(&clock);
         assert_eq!(ready_now.len(), 1);
         assert_eq!(ready_now[0].kind, TaskKind::EconomicTick);
@@ -712,13 +713,36 @@ mod tests {
         assert_eq!(ready_later.len(), 1);
         assert_eq!(ready_later[0].kind, TaskKind::EventTrigger);
 
-        later_clock.advance_minutes((ONE_YEAR_MINUTES + 240) as f64);
-        let ready_after_year = scheduler.next_ready_tasks(&later_clock);
+        let mut yearly_clock = GameClock::new();
+        yearly_clock.advance_minutes((ONE_YEAR_MINUTES + 240) as f64);
+        let ready_after_year = scheduler.next_ready_tasks(&yearly_clock);
         assert!(
             ready_after_year
                 .iter()
                 .any(|task| task.kind == TaskKind::PolicyResolution)
         );
+    }
+
+    #[test]
+    fn repeating_schedule_spec_requeues_task() {
+        let mut scheduler = Scheduler::new();
+        scheduler.schedule(
+            ScheduledTask::new(TaskKind::EconomicTick, 5)
+                .with_schedule(ScheduleSpec::EveryMinutes(60)),
+        );
+
+        let mut clock = GameClock::new();
+        clock.advance_minutes(5.0);
+        let ready_first = scheduler.next_ready_tasks(&clock);
+        assert_eq!(ready_first.len(), 1);
+        assert_eq!(ready_first[0].kind, TaskKind::EconomicTick);
+
+        let mut later_clock = GameClock::new();
+        later_clock.advance_minutes(65.0);
+        let ready_second = scheduler.next_ready_tasks(&later_clock);
+        assert_eq!(ready_second.len(), 1);
+        assert_eq!(ready_second[0].kind, TaskKind::EconomicTick);
+        assert!(ready_second[0].execute_at.minutes >= 60);
     }
 
     #[test]

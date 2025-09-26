@@ -44,7 +44,7 @@ Eversim 社の *Geo-Political Simulator* 系列を意識し、本プロジェク
 - [x] **多層カレンダー**: ゲーム内時刻を `GameClock` (分精度) と `CalendarDate` (日/月/年) の二層で管理。`GameState` に `Scheduler` 構造体を追加し、`VecDeque<ScheduledTask>` でイベントを管理。
 - [x] **タスク種別**: `EconomicTick`, `EventTrigger`, `PolicyResolution`, `DiplomaticPulse` を列挙体で定義し、`ScheduledTask::execute(&mut GameState, scale)` で処理を実装済み。
 - [x] **優先度付き挿入**: 近い未来のタスクを `BinaryHeap` で優先度管理し、長期タスクは `VecDeque` に保持。メモリ節約のため、1年先以降のタスクは圧縮される実装を導入済み。
-- **繰り返しタスク**: 定期処理用に `ScheduleSpec` を導入 (例: 毎3時間、毎日、毎週)。タスク実行後に次回を自動再登録。
+- [x] **繰り返しタスク**: `ScheduleSpec` により毎時/毎日/毎週などの再登録を実装済み。タスク実行後に自動的に次回スケジュールを登録。
 - **UI 連携**: `GameClock` の現在値と次回イベント時刻を GUI に公開。プレイヤーは「高速」「標準」「低速」などの時間倍率を変更できるよう、`tick_minutes` を倍率対応に拡張。
 
 #### 2. 拡張財政モデル
