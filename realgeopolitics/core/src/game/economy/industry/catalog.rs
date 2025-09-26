@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use super::model::{IndustryCatalog, IndustryCategory, SectorDefinition};
@@ -22,7 +22,8 @@ impl IndustryCatalog {
         }
 
         let mut catalog = IndustryCatalog::default();
-        for entry in fs::read_dir(path).context("産業定義の読み込みに失敗しました")? {
+        for entry in fs::read_dir(path).context("産業定義の読み込みに失敗しました")?
+        {
             let entry = entry?;
             let entry_path = entry.path();
             if !is_yaml_file(&entry_path) {

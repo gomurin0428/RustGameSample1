@@ -39,3 +39,4 @@
 - 2025-09-26 20:19:51 SystemsFacade の内部状態を検証するユニットテストを追加し、財政準備フラグの遷移と産業アウトカム配分をカバー。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` の成功を確認。
 - 2025-09-27 07:02:47 IndustryEngine を導入し、産業 tick・補助金・収益配分を `game::industry::IndustryEngine` に委譲。SystemsFacade から配分ロジックを排除し、関連ユニットテストと TROUBLESHOOTING.md を更新。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` が成功したことを確認。
 - 2025-09-27 08:04:06 IndustryEngine の異常系テストを追加し、ゼロスケール tick と不正補助率入力を検証。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` が成功したことを確認。
+- 2025-09-27 08:19:34 産業モジュールを `model.rs` / `catalog.rs` / `runtime.rs` / `effects.rs` に再構成し、`IndustryRuntime` をオーケストレータ化。関連ユニットテストを移設・調整し、`IndustryEngine` 連携とドキュメントを更新。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` の成功を確認。
