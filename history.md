@@ -35,3 +35,4 @@
 - 2025-09-26 19:35:08 GameBuilder 向けユニットテストを追加し、定義未指定時のエラーと初期化依存が揃う正常系を検証。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` が成功したことを確認。
 - 2025-09-26 19:44:46 GameState の時間管理を `game::time::SimulationClock` に切り出し、tick 処理・時間倍率・カレンダー進行を委譲。関連ドキュメントを更新しつつ `C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` の成功を確認。
 - 2025-09-26 20:00:22 SimulationClock の異常系テストを追加し、ゼロ・負値・非有限な時間入力および不正な時間倍率を検証。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` の成功で動作確認。
+- 2025-09-26 20:07:41 GameState 呼び出しを `game::systems::facade::SystemsFacade` に移譲し、財政・外交・政策・イベント処理を集約。`SimulationClock` との連携で tick 実行を委譲するよう更新し、新規異常系テストを含む `C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` の成功を確認。

@@ -6,13 +6,10 @@ use rand::rngs::StdRng;
 use super::{
     bootstrap::{GameBootstrap, GameBuilder},
     country::{BudgetAllocation, CountryDefinition, CountryState},
-    economy::{
-        ExpenseKind, FiscalSnapshot, IndustryRuntime, IndustryTickOutcome, RevenueKind,
-        SectorOverview,
-    },
+    economy::{FiscalSnapshot, IndustryRuntime, SectorOverview},
     event_templates::ScriptedEventState,
     market::CommodityMarket,
-    systems::{diplomacy, events, fiscal, policy},
+    systems::facade::SystemsFacade,
     time::SimulationClock,
 };
 use crate::{CalendarDate, ScheduledTask};
@@ -24,7 +21,7 @@ pub struct GameState {
     commodity_market: CommodityMarket,
     event_templates: Vec<ScriptedEventState>,
     industry_runtime: IndustryRuntime,
-    fiscal_prepared: bool,
+    systems: SystemsFacade,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -65,7 +62,7 @@ impl GameState {
             commodity_market: bootstrap.commodity_market,
             event_templates: bootstrap.event_templates,
             industry_runtime: bootstrap.industry_runtime,
-            fiscal_prepared: false,
+            systems: SystemsFacade::new(),
         };
         game.capture_fiscal_history();
         game
@@ -186,10 +183,8 @@ impl GameState {
         let scale = tick.scale;
         let mut reports = Vec::new();
 
-        if !self.fiscal_prepared {
-            fiscal::prepare_all_fiscal_flows(&mut self.countries, scale);
-            self.fiscal_prepared = true;
-        }
+        self.systems
+            .ensure_fiscal_prepared(&mut self.countries, scale);
 
         if let Some(market_report) = self.commodity_market.update(&mut self.rng, scale) {
             reports.push(market_report);
@@ -210,76 +205,46 @@ impl GameState {
         }
 
         for idx in 0..self.countries.len() {
-            let mut country_reports = fiscal::apply_budget_effects(
+            let mut country_reports = self.systems.apply_country_systems(
                 &mut self.countries,
                 &self.commodity_market,
+                &mut self.rng,
                 idx,
                 scale,
             );
-            if let Some(event_report) =
-                events::trigger_random_event(&mut self.countries, &mut self.rng, idx, scale)
-            {
-                country_reports.push(event_report);
+            if !country_reports.is_empty() {
+                reports.append(&mut country_reports);
             }
-            if let Some(drift_report) =
-                events::apply_economic_drift(&mut self.countries, idx, scale)
-            {
-                country_reports.push(drift_report);
-            }
-            reports.extend(country_reports);
         }
 
         reports.extend(self.process_industry_tick(effective_minutes, scale));
 
         self.capture_fiscal_history();
-        self.fiscal_prepared = false;
+        self.systems.finish_fiscal_cycle();
         Ok(reports)
     }
 
     pub(crate) fn process_economic_tick(&mut self, scale: f64) -> Vec<String> {
-        let mut reports = Vec::new();
-        let already_prepared = self.fiscal_prepared;
-        if !already_prepared {
-            fiscal::prepare_all_fiscal_flows(&mut self.countries, scale);
-            self.fiscal_prepared = true;
-        }
-        for idx in 0..self.countries.len() {
-            let mut country_reports = fiscal::apply_budget_effects(
-                &mut self.countries,
-                &self.commodity_market,
-                idx,
-                scale,
-            );
-            if let Some(event_report) =
-                events::trigger_random_event(&mut self.countries, &mut self.rng, idx, scale)
-            {
-                country_reports.push(event_report);
-            }
-            if let Some(drift_report) =
-                events::apply_economic_drift(&mut self.countries, idx, scale)
-            {
-                country_reports.push(drift_report);
-            }
-            reports.extend(country_reports);
-        }
-        if !already_prepared {
-            self.fiscal_prepared = false;
-        }
-
+        let reports = self.systems.process_economic_tick(
+            &mut self.countries,
+            &self.commodity_market,
+            &mut self.rng,
+            scale,
+        );
         self.capture_fiscal_history();
         reports
     }
 
     pub(crate) fn process_event_trigger(&mut self) -> Vec<String> {
-        events::process_event_trigger(&mut self.countries)
+        self.systems.process_event_trigger(&mut self.countries)
     }
 
     pub(crate) fn process_policy_resolution(&mut self) -> Vec<String> {
-        policy::resolve(&mut self.countries)
+        self.systems.process_policy_resolution(&mut self.countries)
     }
 
     pub(crate) fn process_diplomatic_pulse(&mut self) -> Vec<String> {
-        diplomacy::pulse(&mut self.countries)
+        self.systems.process_diplomatic_pulse(&mut self.countries)
     }
 
     fn process_industry_tick(&mut self, minutes: f64, scale: f64) -> Vec<String> {
@@ -287,34 +252,9 @@ impl GameState {
             return Vec::new();
         }
         let outcome = self.industry_runtime.simulate_tick(minutes, scale);
-        self.apply_industry_outcome(&outcome);
+        self.systems
+            .apply_industry_outcome(&outcome, &mut self.countries);
         outcome.reports
-    }
-
-    fn apply_industry_outcome(&mut self, outcome: &IndustryTickOutcome) {
-        let count = self.countries.len();
-        if count == 0 {
-            return;
-        }
-        let per_country = count as f64;
-        let revenue_share = outcome.total_revenue / per_country;
-        let cost_share = outcome.total_cost / per_country;
-        let gdp_share = outcome.total_gdp / per_country;
-        for country in self.countries.iter_mut() {
-            if revenue_share > 0.0 {
-                country
-                    .fiscal_mut()
-                    .record_revenue(RevenueKind::Trade, revenue_share);
-            }
-            if cost_share > 0.0 {
-                country
-                    .fiscal_mut()
-                    .record_expense(ExpenseKind::IndustrySupport, cost_share);
-            }
-            if gdp_share.abs() > f64::EPSILON {
-                country.gdp = (country.gdp + gdp_share).max(0.0);
-            }
-        }
     }
 
     pub(crate) fn process_scripted_event(&mut self, template_idx: usize) -> Vec<String> {
@@ -344,7 +284,7 @@ impl ScheduledTask {
 mod tests {
     use super::*;
     use crate::game::economy::industry::{IndustryCatalog, IndustryRuntime};
-    use crate::game::economy::{CreditRating, FiscalAccount};
+    use crate::game::economy::{CreditRating, ExpenseKind, FiscalAccount, RevenueKind};
     use crate::game::{IndustryCategory, SectorId};
     use crate::scheduler::{ONE_YEAR_MINUTES, ScheduleSpec};
     use crate::{GameClock, Scheduler, TaskKind};
