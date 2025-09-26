@@ -891,6 +891,7 @@ dependencies = [
 name = "realgeopolitics-web"
 version = "0.1.0"
 dependencies = [
+ "gloo-timers 0.3.0",
  "realgeopolitics-core",
  "serde_json",
  "wasm-bindgen",

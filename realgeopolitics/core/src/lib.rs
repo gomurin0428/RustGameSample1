@@ -1,3 +1,3 @@
 mod game;
 
-pub use game::{Action, CountryDefinition, CountryState, GameState};
+pub use game::{BudgetAllocation, CountryDefinition, CountryState, GameState};

@@ -19,4 +19,5 @@ serde_json = "1"
 yew = { version = "0.21", features = ["csr"] }
 wasm-bindgen = "0.2"
 gloo-utils = "0.2"
-web-sys = { version = "0.3", features = ["HtmlSelectElement", "EventTarget"] }
+gloo-timers = "0.3"
+web-sys = { version = "0.3", features = ["HtmlSelectElement", "HtmlInputElement", "EventTarget"] }

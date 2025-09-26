@@ -42,23 +42,32 @@
         margin-right: 16px;
         gap: 6px;
       }
-      select, button {
+      .allocation-summary {
+        display: inline-flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 0.95rem;
+      }
+      select {
         padding: 8px 12px;
         border-radius: 8px;
         border: 1px solid rgba(148, 163, 184, 0.4);
         background: rgba(30, 41, 59, 0.85);
         color: #e2e8f0;
       }
-      button {
-        cursor: pointer;
-        transition: transform 0.15s ease, background 0.15s ease;
+      .slider-row {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 12px;
       }
-      button:hover {
-        transform: translateY(-1px);
-        background: rgba(59, 130, 246, 0.75);
+      .slider-row label {
+        width: 140px;
+        font-weight: 600;
       }
-      button.advance {
-        background: rgba(236, 72, 153, 0.75);
+      .slider-row input[type="range"] {
+        flex: 1;
+        accent-color: #38bdf8;
       }
       table {
         width: 100%;

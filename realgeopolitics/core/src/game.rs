@@ -1,9 +1,17 @@
 use std::collections::HashMap;
 
-use anyhow::{Result, anyhow, bail, ensure};
+use anyhow::{Result, anyhow, ensure};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
+
+const BASE_TICK_MINUTES: f64 = 60.0;
+const MAX_RELATION: i32 = 100;
+const MIN_RELATION: i32 = -100;
+const MAX_METRIC: i32 = 100;
+const MIN_METRIC: i32 = 0;
+const MAX_RESOURCES: i32 = 200;
+const MIN_RESOURCES: i32 = 0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountryDefinition {
@@ -18,6 +26,60 @@ pub struct CountryDefinition {
     pub resources: i32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct BudgetAllocation {
+    pub infrastructure: f64,
+    pub military: f64,
+    pub welfare: f64,
+    pub diplomacy: f64,
+}
+
+impl BudgetAllocation {
+    pub fn new(infrastructure: f64, military: f64, welfare: f64, diplomacy: f64) -> Result<Self> {
+        ensure!(infrastructure.is_finite(), "インフラ配分が不正です");
+        ensure!(military.is_finite(), "軍事配分が不正です");
+        ensure!(welfare.is_finite(), "福祉配分が不正です");
+        ensure!(diplomacy.is_finite(), "外交配分が不正です");
+        ensure!(
+            infrastructure >= 0.0,
+            "インフラ配分は0以上で指定してください"
+        );
+        ensure!(military >= 0.0, "軍事配分は0以上で指定してください");
+        ensure!(welfare >= 0.0, "福祉配分は0以上で指定してください");
+        ensure!(diplomacy >= 0.0, "外交配分は0以上で指定してください");
+        let total = infrastructure + military + welfare + diplomacy;
+        ensure!(
+            total <= 1.0 + f64::EPSILON,
+            "配分の合計が100%を超えています: {:.1}%",
+            total * 100.0
+        );
+        Ok(Self {
+            infrastructure,
+            military,
+            welfare,
+            diplomacy,
+        })
+    }
+
+    pub fn from_percentages(
+        infrastructure: f64,
+        military: f64,
+        welfare: f64,
+        diplomacy: f64,
+    ) -> Result<Self> {
+        Self::new(
+            infrastructure / 100.0,
+            military / 100.0,
+            welfare / 100.0,
+            diplomacy / 100.0,
+        )
+    }
+
+    pub fn total(&self) -> f64 {
+        self.infrastructure + self.military + self.welfare + self.diplomacy
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CountryState {
     pub name: String,
@@ -30,53 +92,21 @@ pub struct CountryState {
     pub budget: f64,
     pub resources: i32,
     pub relations: HashMap<String, i32>,
-    planned_action: Option<Action>,
+    allocations: BudgetAllocation,
 }
 
 impl CountryState {
-    pub fn planned_action(&self) -> Option<&Action> {
-        self.planned_action.as_ref()
+    pub fn allocations(&self) -> BudgetAllocation {
+        self.allocations
     }
 
-    pub fn relations(&self) -> &HashMap<String, i32> {
-        &self.relations
-    }
-
-    fn set_planned_action(&mut self, action: Option<Action>) {
-        self.planned_action = action;
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Action {
-    Infrastructure,
-    MilitaryDrill,
-    WelfarePackage,
-    Diplomacy { target: String },
-}
-
-impl Action {
-    pub fn cost(&self) -> f64 {
-        match self {
-            Action::Infrastructure => 120.0,
-            Action::MilitaryDrill => 150.0,
-            Action::WelfarePackage => 100.0,
-            Action::Diplomacy { .. } => 80.0,
-        }
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            Action::Infrastructure => "インフラ投資",
-            Action::MilitaryDrill => "軍事演習",
-            Action::WelfarePackage => "社会福祉パッケージ",
-            Action::Diplomacy { .. } => "外交ミッション",
-        }
+    fn set_allocations(&mut self, allocations: BudgetAllocation) {
+        self.allocations = allocations;
     }
 }
 
 pub struct GameState {
-    turn: u32,
+    simulation_minutes: f64,
     rng: StdRng,
     countries: Vec<CountryState>,
 }
@@ -95,6 +125,8 @@ impl GameState {
             "国が1つも定義されていません。最低1件の国を用意してください。"
         );
 
+        let default_alloc = BudgetAllocation::new(0.25, 0.25, 0.25, 0.25)?;
+
         let mut countries: Vec<CountryState> = definitions
             .into_iter()
             .map(|definition| CountryState {
@@ -108,14 +140,14 @@ impl GameState {
                 budget: definition.budget.max(0.0),
                 resources: clamp_resource(definition.resources),
                 relations: HashMap::new(),
-                planned_action: None,
+                allocations: default_alloc,
             })
             .collect();
 
         initialise_relations(&mut countries);
 
         Ok(Self {
-            turn: 0,
+            simulation_minutes: 0.0,
             rng,
             countries,
         })
@@ -129,8 +161,8 @@ impl GameState {
         Self::from_definitions_with_rng(definitions, StdRng::seed_from_u64(seed))
     }
 
-    pub fn turn(&self) -> u32 {
-        self.turn
+    pub fn simulation_minutes(&self) -> f64 {
+        self.simulation_minutes
     }
 
     pub fn countries(&self) -> &[CountryState] {
@@ -150,178 +182,155 @@ impl GameState {
             .position(|country| country.name.to_ascii_lowercase() == name_lower)
     }
 
-    pub fn plan_action(&mut self, idx: usize, action: Action) -> Result<()> {
-        if idx >= self.countries.len() {
-            bail!("指定された国の番号が無効です: {}", idx + 1);
-        }
+    pub fn allocations_of(&self, idx: usize) -> Result<BudgetAllocation> {
+        self.countries
+            .get(idx)
+            .map(|country| country.allocations())
+            .ok_or_else(|| anyhow!("指定された国の番号が無効です: {}", idx + 1))
+    }
 
-        if self.countries[idx].planned_action().is_some() {
-            bail!(
-                "{} には既に行動が設定されています。先にキャンセルしてください。",
-                self.countries[idx].name
-            );
-        }
-
-        if self.countries[idx].budget < action.cost() {
-            bail!(
-                "{} の予算が不足しています。必要 {:.1} に対して現在 {:.1} です。",
-                self.countries[idx].name,
-                action.cost(),
-                self.countries[idx].budget
-            );
-        }
-
-        if let Action::Diplomacy { target } = &action {
-            let lower = target.to_ascii_lowercase();
-            ensure!(
-                self.countries
-                    .iter()
-                    .any(|other| other.name.to_ascii_lowercase() == lower),
-                "外交対象 {} が存在しません。",
-                target
-            );
-            ensure!(
-                self.countries[idx].name.to_ascii_lowercase() != lower,
-                "自国に対する外交ミッションは設定できません。"
-            );
-        }
-
+    pub fn update_allocations(&mut self, idx: usize, allocations: BudgetAllocation) -> Result<()> {
         let country = self
             .countries
             .get_mut(idx)
             .ok_or_else(|| anyhow!("指定された国の番号が無効です: {}", idx + 1))?;
-        country.set_planned_action(Some(action));
+        country.set_allocations(allocations);
         Ok(())
     }
 
-    pub fn cancel_action(&mut self, idx: usize) -> Result<()> {
-        if idx >= self.countries.len() {
-            bail!("指定された国の番号が無効です: {}", idx + 1);
-        }
+    pub fn tick_minutes(&mut self, minutes: f64) -> Result<Vec<String>> {
+        ensure!(minutes.is_finite(), "時間が不正です");
+        ensure!(minutes > 0.0, "時間は正の値で指定してください");
 
-        if self.countries[idx].planned_action().is_none() {
-            bail!(
-                "{} にはキャンセルする行動がありません。",
-                self.countries[idx].name
-            );
-        }
-
-        let country = self
-            .countries
-            .get_mut(idx)
-            .ok_or_else(|| anyhow!("指定された国の番号が無効です: {}", idx + 1))?;
-        country.set_planned_action(None);
-        Ok(())
-    }
-
-    pub fn advance_turn(&mut self) -> Result<Vec<String>> {
-        self.turn = self
-            .turn
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("ターン数がオーバーフローしました"))?;
-
+        self.simulation_minutes += minutes;
+        let scale = minutes / BASE_TICK_MINUTES;
         let mut reports = Vec::new();
 
-        for country_index in 0..self.countries.len() {
-            let action_report =
-                if let Some(action) = self.countries[country_index].planned_action.clone() {
-                    self.resolve_action(country_index, action)?
-                } else {
-                    format!(
-                        "{} はこのターンで特別な行動を行いませんでした。",
-                        self.countries[country_index].name
-                    )
-                };
-            self.countries[country_index].set_planned_action(None);
-            reports.push(action_report);
-
-            if let Some(event_report) = self.trigger_random_event(country_index) {
-                reports.push(event_report);
+        for idx in 0..self.countries.len() {
+            let mut country_reports = self.apply_budget_effects(idx, scale);
+            if let Some(event_report) = self.trigger_random_event(idx, scale) {
+                country_reports.push(event_report);
             }
-
-            if let Some(drift_text) = self.apply_economic_drift(country_index) {
-                reports.push(drift_text);
+            if let Some(drift_report) = self.apply_economic_drift(idx, scale) {
+                country_reports.push(drift_report);
             }
+            reports.extend(country_reports);
         }
 
         Ok(reports)
     }
 
-    fn resolve_action(&mut self, idx: usize, action: Action) -> Result<String> {
-        if idx >= self.countries.len() {
-            bail!("指定された国の番号が無効です: {}", idx + 1);
+    fn apply_budget_effects(&mut self, idx: usize, scale: f64) -> Vec<String> {
+        let mut reports = Vec::new();
+        let allocation = self.countries[idx].allocations();
+        let total_allocation = allocation.total();
+
+        let revenue = {
+            let country = &self.countries[idx];
+            (country.gdp * 0.015 * scale).max(5.0 * scale)
+        };
+        {
+            let country = &mut self.countries[idx];
+            country.budget += revenue;
         }
 
-        let cost = action.cost();
-        if self.countries[idx].budget < cost {
-            bail!(
-                "{} の予算が不足しています。必要 {:.1} に対して現在 {:.1} です。",
-                self.countries[idx].name,
-                cost,
-                self.countries[idx].budget
-            );
+        if total_allocation <= f64::EPSILON {
+            return reports;
         }
-        self.countries[idx].budget -= cost;
 
-        match action {
-            Action::Infrastructure => {
-                let name = self.countries[idx].name.clone();
-                {
-                    let country = &mut self.countries[idx];
-                    country.gdp += 140.0;
-                    country.stability = clamp_metric(country.stability + 4);
-                    country.approval = clamp_metric(country.approval + 3);
-                    country.resources = clamp_resource(country.resources - 4);
-                }
-                Ok(format!(
-                    "{} はインフラ投資を実施し、GDP が改善しました。",
-                    name
-                ))
+        let spending_capacity = {
+            let country = &self.countries[idx];
+            country.budget * 0.08 * scale
+        };
+
+        let mut total_spent = 0.0;
+
+        let infra_spend = spending_capacity * allocation.infrastructure;
+        if infra_spend > 0.0 {
+            total_spent += infra_spend;
+            let name = self.countries[idx].name.clone();
+            {
+                let country = &mut self.countries[idx];
+                country.gdp += infra_spend * 0.9;
+                country.stability = clamp_metric(country.stability + (4.0 * scale) as i32);
+                country.approval = clamp_metric(country.approval + (3.0 * scale) as i32);
+                country.resources = clamp_resource(country.resources - (6.0 * scale) as i32);
             }
-            Action::MilitaryDrill => {
-                let name = self.countries[idx].name.clone();
-                {
-                    let country = &mut self.countries[idx];
-                    country.military = clamp_metric(country.military + 6);
-                    country.stability = clamp_metric(country.stability + 2);
-                    country.approval = clamp_metric(country.approval - 4);
-                    country.resources = clamp_resource(country.resources - 6);
-                }
-                self.adjust_relations_after_military(idx, -3);
-                Ok(format!(
-                    "{} は軍事演習を実施し、軍事力が向上しました。",
-                    name
-                ))
+            reports.push(format!(
+                "{} がインフラ投資を実施中です (支出 {:.1})",
+                name, infra_spend
+            ));
+        }
+
+        let military_spend = spending_capacity * allocation.military;
+        if military_spend > 0.0 {
+            total_spent += military_spend;
+            let name = self.countries[idx].name.clone();
+            {
+                let country = &mut self.countries[idx];
+                country.military = clamp_metric(country.military + (5.0 * scale) as i32);
+                country.stability = clamp_metric(country.stability + (2.0 * scale) as i32);
+                country.approval = clamp_metric(country.approval - (3.0 * scale) as i32);
+                country.resources = clamp_resource(country.resources - (4.0 * scale) as i32);
             }
-            Action::WelfarePackage => {
-                let name = self.countries[idx].name.clone();
-                {
-                    let country = &mut self.countries[idx];
-                    country.approval = clamp_metric(country.approval + 6);
-                    country.stability = clamp_metric(country.stability + 3);
-                    country.gdp = (country.gdp - 40.0).max(0.0);
-                }
-                Ok(format!(
-                    "{} は社会福祉パッケージを実施し、国民からの支持を得ました。",
-                    name
-                ))
+            self.adjust_relations_after_military(idx, (-2.0 * scale) as i32);
+            reports.push(format!(
+                "{} が軍事強化に予算を充当しました (支出 {:.1})",
+                name, military_spend
+            ));
+        }
+
+        let welfare_spend = spending_capacity * allocation.welfare;
+        if welfare_spend > 0.0 {
+            total_spent += welfare_spend;
+            let name = self.countries[idx].name.clone();
+            {
+                let country = &mut self.countries[idx];
+                country.approval = clamp_metric(country.approval + (6.0 * scale) as i32);
+                country.stability = clamp_metric(country.stability + (4.0 * scale) as i32);
+                country.gdp = (country.gdp - welfare_spend * 0.25).max(0.0);
             }
-            Action::Diplomacy { target } => {
-                let target_index = self
-                    .find_country_index(&target)
-                    .ok_or_else(|| anyhow!("外交対象 {} が見つかりません。", target))?;
-                ensure!(target_index != idx, "自国に外交することはできません。");
-                let name = self.countries[idx].name.clone();
-                self.adjust_bilateral_relation(idx, target_index, 9, 7);
-                Ok(format!(
-                    "{} は {} との外交ミッションで関係を改善しました。",
-                    name, target
-                ))
+            reports.push(format!(
+                "{} が社会福祉を拡充しました (支出 {:.1})",
+                name, welfare_spend
+            ));
+        }
+
+        let diplomacy_spend = spending_capacity * allocation.diplomacy;
+        if diplomacy_spend > 0.0 {
+            total_spent += diplomacy_spend;
+            let name = self.countries[idx].name.clone();
+            self.improve_relations(idx, scale);
+            reports.push(format!(
+                "{} が外交関係の改善に取り組んでいます (支出 {:.1})",
+                name, diplomacy_spend
+            ));
+        }
+
+        {
+            let country = &mut self.countries[idx];
+            country.budget = (country.budget - total_spent).max(0.0);
+        }
+
+        reports
+    }
+
+    fn improve_relations(&mut self, idx: usize, scale: f64) {
+        let delta_primary = (5.0 * scale) as i32;
+        let delta_secondary = (3.0 * scale) as i32;
+
+        for partner_idx in 0..self.countries.len() {
+            if partner_idx == idx {
+                continue;
             }
+            self.adjust_bilateral_relation(idx, partner_idx, delta_primary, delta_secondary);
         }
     }
 
     fn adjust_relations_after_military(&mut self, idx: usize, delta: i32) {
+        if delta == 0 {
+            return;
+        }
         for other_index in 0..self.countries.len() {
             if other_index == idx {
                 continue;
@@ -370,34 +379,35 @@ impl GameState {
         }
     }
 
-    fn trigger_random_event(&mut self, idx: usize) -> Option<String> {
-        if !self.rng.gen_bool(0.35) {
+    fn trigger_random_event(&mut self, idx: usize, scale: f64) -> Option<String> {
+        let probability = (0.25 * scale).clamp(0.0, 1.0);
+        if !self.rng.gen_bool(probability as f64) {
             return None;
         }
 
         let country = &mut self.countries[idx];
         match self.rng.gen_range(0..3) {
             0 => {
-                country.gdp += 90.0;
-                country.approval = clamp_metric(country.approval + 2);
+                country.gdp += 60.0 * scale;
+                country.approval = clamp_metric(country.approval + (2.0 * scale) as i32);
                 Some(format!(
-                    "{} で技術革新が起き、GDP が伸びました。",
+                    "{} で技術革新が発生し、経済が加速しました。",
                     country.name
                 ))
             }
             1 => {
-                country.stability = clamp_metric(country.stability - 6);
-                country.approval = clamp_metric(country.approval - 5);
+                country.stability = clamp_metric(country.stability - (5.0 * scale) as i32);
+                country.approval = clamp_metric(country.approval - (4.0 * scale) as i32);
                 Some(format!(
-                    "{} で抗議活動が拡大し、安定度が低下しました。",
+                    "{} で抗議運動が拡大し、安定度が低下しました。",
                     country.name
                 ))
             }
             2 => {
-                country.resources = clamp_resource(country.resources - 8);
-                country.military = clamp_metric(country.military + 3);
+                country.resources = clamp_resource(country.resources - (6.0 * scale) as i32);
+                country.military = clamp_metric(country.military + (3.0 * scale) as i32);
                 Some(format!(
-                    "{} は国境で緊張が高まり、軍事力を増強しました。",
+                    "{} は国境緊張に対応して軍備を増強しました。",
                     country.name
                 ))
             }
@@ -405,22 +415,19 @@ impl GameState {
         }
     }
 
-    fn apply_economic_drift(&mut self, idx: usize) -> Option<String> {
+    fn apply_economic_drift(&mut self, idx: usize, scale: f64) -> Option<String> {
         let country = &mut self.countries[idx];
-        let revenue = (country.gdp * 0.018).max(25.0);
-        country.budget += revenue;
-
-        let drift = (country.stability - 50) as f64 * 0.6;
-        if drift.abs() > 1.0 {
+        let drift = (country.stability - 50) as f64 * 0.4 * scale;
+        if drift.abs() > 0.5 {
             country.gdp = (country.gdp + drift).max(0.0);
             if drift > 0.0 {
                 return Some(format!(
-                    "{} は安定した統治により GDP が {:.1} 増えました。",
+                    "{} は安定した統治で GDP が {:.1} 増加しました。",
                     country.name, drift
                 ));
             } else {
                 return Some(format!(
-                    "{} は不安定化により GDP が {:.1} 減少しました。",
+                    "{} は不安定化で GDP が {:.1} 減少しました。",
                     country.name,
                     drift.abs()
                 ));
@@ -446,15 +453,15 @@ fn initialise_relations(countries: &mut [CountryState]) {
 }
 
 fn clamp_metric(value: i32) -> i32 {
-    value.clamp(0, 100)
+    value.clamp(MIN_METRIC, MAX_METRIC)
 }
 
 fn clamp_relation(value: i32) -> i32 {
-    value.clamp(-100, 100)
+    value.clamp(MIN_RELATION, MAX_RELATION)
 }
 
 fn clamp_resource(value: i32) -> i32 {
-    value.clamp(0, 200)
+    value.clamp(MIN_RESOURCES, MAX_RESOURCES)
 }
 
 #[cfg(test)]
@@ -485,17 +492,6 @@ mod tests {
                 "approval": 45,
                 "budget": 380.0,
                 "resources": 65
-            },
-            {
-                "name": "Caldoria",
-                "government": "Monarchy",
-                "population_millions": 30.0,
-                "gdp": 1000.0,
-                "stability": 50,
-                "military": 52,
-                "approval": 48,
-                "budget": 300.0,
-                "resources": 60
             }
         ]"#,
         )
@@ -503,51 +499,38 @@ mod tests {
     }
 
     #[test]
-    fn loads_countries() {
-        let game = GameState::from_definitions_with_seed(sample_definitions(), 1).unwrap();
-        assert_eq!(game.countries().len(), 3);
-        assert_eq!(game.countries()[0].relations.len(), 2);
+    fn allocations_must_not_exceed_100_percent() {
+        let result = BudgetAllocation::from_percentages(40.0, 30.0, 20.0, 15.0);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn infrastructure_improves_gdp_and_consumes_budget() {
-        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 2).unwrap();
+    fn infrastructure_allocation_increases_gdp() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 1).unwrap();
+        let alloc = BudgetAllocation::from_percentages(60.0, 10.0, 15.0, 10.0).unwrap();
+        game.update_allocations(0, alloc).unwrap();
         let before_gdp = game.countries()[0].gdp;
-        let before_budget = game.countries()[0].budget;
-        game.plan_action(0, Action::Infrastructure).unwrap();
-        let reports = game.advance_turn().unwrap();
+        let reports = game.tick_minutes(120.0).unwrap();
         assert!(reports.iter().any(|r| r.contains("インフラ投資")));
         assert!(game.countries()[0].gdp > before_gdp);
-        assert!(game.countries()[0].budget < before_budget);
     }
 
     #[test]
-    fn diplomacy_updates_relations_for_both_countries() {
-        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 3).unwrap();
+    fn diplomacy_allocation_improves_relations() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 2).unwrap();
         let before = game.countries()[0]
-            .relations()
+            .relations
             .get("Borealis")
             .copied()
             .unwrap();
-        game.plan_action(
-            0,
-            Action::Diplomacy {
-                target: "Borealis".to_owned(),
-            },
-        )
-        .unwrap();
-        game.advance_turn().unwrap();
-        let after_a_to_b = game.countries()[0]
-            .relations()
+        let alloc = BudgetAllocation::from_percentages(10.0, 10.0, 10.0, 60.0).unwrap();
+        game.update_allocations(0, alloc).unwrap();
+        game.tick_minutes(180.0).unwrap();
+        let after = game.countries()[0]
+            .relations
             .get("Borealis")
             .copied()
             .unwrap();
-        let after_b_to_a = game.countries()[1]
-            .relations()
-            .get("Asteria")
-            .copied()
-            .unwrap();
-        assert!(after_a_to_b > before);
-        assert!(after_b_to_a > before);
+        assert!(after > before);
     }
 }

@@ -1,19 +1,18 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
-use realgeopolitics_core::{Action, CountryDefinition, GameState};
+use realgeopolitics_core::{BudgetAllocation, CountryDefinition, GameState};
 use serde_json::Error as SerdeError;
 
 #[cfg(target_arch = "wasm32")]
-use yew::prelude::*;
-
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
-
+use gloo_timers::callback::Interval;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
-
 #[cfg(target_arch = "wasm32")]
-use web_sys::HtmlSelectElement;
+use wasm_bindgen::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use web_sys::{HtmlInputElement, HtmlSelectElement};
+#[cfg(target_arch = "wasm32")]
+use yew::prelude::*;
 
 const DEFAULT_COUNTRIES: &str = r#"[
     {
@@ -56,90 +55,70 @@ fn load_default_definitions() -> Result<Vec<CountryDefinition>, SerdeError> {
 }
 
 #[cfg(target_arch = "wasm32")]
-#[derive(Clone, PartialEq)]
-enum ActionKind {
-    None,
+#[derive(Clone, Copy, PartialEq)]
+struct AllocationForm {
+    infrastructure: f64,
+    military: f64,
+    welfare: f64,
+    diplomacy: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl AllocationForm {
+    fn from_allocation(allocation: BudgetAllocation) -> Self {
+        Self {
+            infrastructure: allocation.infrastructure * 100.0,
+            military: allocation.military * 100.0,
+            welfare: allocation.welfare * 100.0,
+            diplomacy: allocation.diplomacy * 100.0,
+        }
+    }
+
+    fn update(mut self, field: AllocationField, value: f64) -> Self {
+        let clamped = value.clamp(0.0, 100.0);
+        match field {
+            AllocationField::Infrastructure => self.infrastructure = clamped,
+            AllocationField::Military => self.military = clamped,
+            AllocationField::Welfare => self.welfare = clamped,
+            AllocationField::Diplomacy => self.diplomacy = clamped,
+        }
+        self.normalize()
+    }
+
+    fn normalize(mut self) -> Self {
+        let total = self.total();
+        if total > 100.0 + f64::EPSILON {
+            let factor = 100.0 / total;
+            self.infrastructure *= factor;
+            self.military *= factor;
+            self.welfare *= factor;
+            self.diplomacy *= factor;
+        }
+        self
+    }
+
+    fn total(&self) -> f64 {
+        self.infrastructure + self.military + self.welfare + self.diplomacy
+    }
+
+    fn to_budget_allocation(&self) -> Result<BudgetAllocation, String> {
+        BudgetAllocation::from_percentages(
+            self.infrastructure,
+            self.military,
+            self.welfare,
+            self.diplomacy,
+        )
+        .map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+enum AllocationField {
     Infrastructure,
     Military,
     Welfare,
     Diplomacy,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl ActionKind {
-    fn from_value(value: &str) -> Self {
-        match value {
-            "infra" => ActionKind::Infrastructure,
-            "mil" => ActionKind::Military,
-            "wel" => ActionKind::Welfare,
-            "dip" => ActionKind::Diplomacy,
-            _ => ActionKind::None,
-        }
-    }
-
-    fn as_value(&self) -> &'static str {
-        match self {
-            ActionKind::None => "none",
-            ActionKind::Infrastructure => "infra",
-            ActionKind::Military => "mil",
-            ActionKind::Welfare => "wel",
-            ActionKind::Diplomacy => "dip",
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[derive(Clone, PartialEq)]
-struct ActionForm {
-    kind: ActionKind,
-    target_idx: usize,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl Default for ActionForm {
-    fn default() -> Self {
-        Self {
-            kind: ActionKind::None,
-            target_idx: 0,
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn action_form_from_state(game: &GameState, actor_idx: usize) -> ActionForm {
-    let mut form = ActionForm::default();
-    if let Some(country) = game.countries().get(actor_idx) {
-        if let Some(action) = country.planned_action() {
-            match action {
-                Action::Infrastructure => {
-                    form.kind = ActionKind::Infrastructure;
-                }
-                Action::MilitaryDrill => {
-                    form.kind = ActionKind::Military;
-                }
-                Action::WelfarePackage => {
-                    form.kind = ActionKind::Welfare;
-                }
-                Action::Diplomacy { target } => {
-                    form.kind = ActionKind::Diplomacy;
-                    if let Some(idx) = game.find_country_index(target) {
-                        form.target_idx = idx;
-                    }
-                }
-            }
-        }
-    }
-    form
-}
-
-#[cfg(target_arch = "wasm32")]
-fn diplomacy_default_target(game: &GameState, actor_idx: usize) -> usize {
-    for (idx, _) in game.countries().iter().enumerate() {
-        if idx != actor_idx {
-            return idx;
-        }
-    }
-    actor_idx
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -150,44 +129,57 @@ fn app() -> Html {
         GameState::from_definitions(initial_definitions).expect("国データの初期化に失敗しました")
     });
 
-    let refresh = use_state(|| 0u32);
+    let initial_forms = {
+        let game_ref = game.borrow();
+        game_ref
+            .countries()
+            .iter()
+            .map(|country| AllocationForm::from_allocation(country.allocations()))
+            .collect::<Vec<_>>()
+    };
+
+    let allocation_forms = use_state(|| initial_forms);
     let selected_country = use_state(|| 0usize);
-    let action_form = use_state(ActionForm::default);
     let message = use_state(|| Option::<String>::None);
     let reports = use_state(Vec::<String>::new);
+    let refresh = use_state(|| 0u32);
 
     {
         let game = game.clone();
-        let action_form = action_form.clone();
-        let selected_country = selected_country.clone();
-        use_effect_with(selected_country.clone(), move |idx| {
-            let game_ref = game.borrow();
-            let form = action_form_from_state(&game_ref, **idx);
-            action_form.set(form);
-            || ()
+        let forms_handle = allocation_forms.clone();
+        let reports_handle = reports.clone();
+        let message_handle = message.clone();
+        let refresh = refresh.clone();
+        use_effect_with((), move |_| {
+            let interval = Interval::new(1000, move || {
+                let mut game_mut = game.borrow_mut();
+                match game_mut.tick_minutes(10.0) {
+                    Ok(new_reports) => {
+                        if !new_reports.is_empty() {
+                            let mut aggregated = (*reports_handle).clone();
+                            aggregated.extend(new_reports.into_iter());
+                            if aggregated.len() > 12 {
+                                let len = aggregated.len();
+                                aggregated = aggregated[len - 12..].to_vec();
+                            }
+                            reports_handle.set(aggregated);
+                        }
+                        let snapshot = game_mut
+                            .countries()
+                            .iter()
+                            .map(|country| AllocationForm::from_allocation(country.allocations()))
+                            .collect::<Vec<_>>();
+                        forms_handle.set(snapshot);
+                        refresh.set(refresh.wrapping_add(1));
+                    }
+                    Err(err) => {
+                        message_handle.set(Some(err.to_string()));
+                    }
+                }
+            });
+            move || drop(interval)
         });
     }
-
-    let force_refresh = {
-        let refresh = refresh.clone();
-        Callback::from(move |_| {
-            refresh.set(refresh.wrapping_add(1));
-        })
-    };
-
-    let set_error = {
-        let message = message.clone();
-        Callback::from(move |err: String| {
-            message.set(Some(err));
-        })
-    };
-
-    let clear_error = {
-        let message = message.clone();
-        Callback::from(move |_| {
-            message.set(None);
-        })
-    };
 
     let on_country_change = {
         let selected_country = selected_country.clone();
@@ -203,150 +195,62 @@ fn app() -> Html {
         })
     };
 
-    let on_action_change = {
-        let action_form = action_form.clone();
+    let update_slider = {
         let game = game.clone();
-        let selected_country = selected_country.clone();
-        Callback::from(move |event: Event| {
-            let mut updated = (*action_form).clone();
-            if let Some(select) = event
-                .target()
-                .and_then(|target| target.dyn_into::<HtmlSelectElement>().ok())
-            {
-                updated.kind = ActionKind::from_value(&select.value());
-                if matches!(updated.kind, ActionKind::Diplomacy) {
-                    let game_ref = game.borrow();
-                    updated.target_idx = diplomacy_default_target(&game_ref, *selected_country);
-                }
-            }
-            action_form.set(updated);
-        })
-    };
-
-    let on_target_change = {
-        let action_form = action_form.clone();
-        Callback::from(move |event: Event| {
-            if let Some(select) = event
-                .target()
-                .and_then(|target| target.dyn_into::<HtmlSelectElement>().ok())
-            {
-                if let Ok(idx) = select.value().parse::<usize>() {
-                    let mut updated = (*action_form).clone();
-                    updated.target_idx = idx;
-                    action_form.set(updated);
-                }
-            }
-        })
-    };
-
-    let on_plan_action = {
-        let game = game.clone();
-        let selected_country = selected_country.clone();
-        let action_form = action_form.clone();
-        let set_error = set_error.clone();
-        let clear_error = clear_error.clone();
-        let force_refresh = force_refresh.clone();
-        Callback::from(move |_| {
-            let actor_idx = *selected_country;
-            let current_form = (*action_form).clone();
-            if matches!(current_form.kind, ActionKind::None) {
-                set_error.emit("行動種別を選択してください。".to_string());
+        let forms = allocation_forms.clone();
+        let message = message.clone();
+        Callback::from(move |payload: SliderChange| {
+            let mut current_forms = (*forms).clone();
+            if payload.country_idx >= current_forms.len() {
                 return;
             }
-            let action = {
-                let game_ref = game.borrow();
-                match current_form.kind {
-                    ActionKind::Infrastructure => Some(Action::Infrastructure),
-                    ActionKind::Military => Some(Action::MilitaryDrill),
-                    ActionKind::Welfare => Some(Action::WelfarePackage),
-                    ActionKind::Diplomacy => {
-                        let countries = game_ref.countries();
-                        if current_form.target_idx >= countries.len() {
-                            None
-                        } else if current_form.target_idx == actor_idx {
-                            None
-                        } else {
-                            Some(Action::Diplomacy {
-                                target: countries[current_form.target_idx].name.clone(),
-                            })
-                        }
+            let updated = current_forms[payload.country_idx].update(payload.field, payload.value);
+            match updated.to_budget_allocation() {
+                Ok(allocation) => {
+                    if let Err(err) = game
+                        .borrow_mut()
+                        .update_allocations(payload.country_idx, allocation)
+                    {
+                        message.set(Some(err.to_string()));
+                        return;
                     }
-                    ActionKind::None => None,
+                    current_forms[payload.country_idx] = updated;
+                    forms.set(current_forms);
+                    message.set(None);
                 }
-            };
-
-            if let Some(action) = action {
-                let mut game_mut = game.borrow_mut();
-                match game_mut.plan_action(actor_idx, action) {
-                    Ok(_) => {
-                        clear_error.emit(());
-                        let updated_form = action_form_from_state(&game_mut, actor_idx);
-                        action_form.set(updated_form);
-                        force_refresh.emit(());
-                    }
-                    Err(err) => set_error.emit(err.to_string()),
+                Err(err) => {
+                    message.set(Some(err));
                 }
-            } else {
-                set_error.emit("外交対象の選択が正しくありません。".to_string());
             }
         })
     };
 
-    let on_cancel_action = {
-        let game = game.clone();
-        let selected_country = selected_country.clone();
-        let clear_error = clear_error.clone();
-        let set_error = set_error.clone();
-        let force_refresh = force_refresh.clone();
-        let action_form = action_form.clone();
-        Callback::from(move |_| {
-            let actor_idx = *selected_country;
-            let mut game_mut = game.borrow_mut();
-            match game_mut.cancel_action(actor_idx) {
-                Ok(_) => {
-                    action_form.set(ActionForm::default());
-                    clear_error.emit(());
-                    force_refresh.emit(());
-                }
-                Err(err) => set_error.emit(err.to_string()),
-            }
+    let countries_snapshot = game.borrow();
+    let countries = countries_snapshot.countries();
+    let current_idx = (*selected_country).min(countries.len().saturating_sub(1));
+    let current_allocation = allocation_forms
+        .get(current_idx)
+        .copied()
+        .unwrap_or(AllocationForm {
+            infrastructure: 0.0,
+            military: 0.0,
+            welfare: 0.0,
+            diplomacy: 0.0,
+        });
+    let remaining = (100.0 - current_allocation.total()).max(0.0);
+
+    let relations: Vec<(String, i32)> = countries
+        .get(current_idx)
+        .map(|country| {
+            let mut pairs: Vec<_> = country
+                .relations
+                .iter()
+                .map(|(name, value)| (name.clone(), *value))
+                .collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            pairs
         })
-    };
-
-    let on_advance_turn = {
-        let game = game.clone();
-        let reports_state = reports.clone();
-        let clear_error = clear_error.clone();
-        let set_error = set_error.clone();
-        let force_refresh = force_refresh.clone();
-        Callback::from(move |_| {
-            let mut game_mut = game.borrow_mut();
-            match game_mut.advance_turn() {
-                Ok(result) => {
-                    reports_state.set(result);
-                    clear_error.emit(());
-                    force_refresh.emit(());
-                }
-                Err(err) => set_error.emit(err.to_string()),
-            }
-        })
-    };
-
-    let game_snapshot = game.borrow();
-    let countries = game_snapshot.countries();
-    let selected_idx = (*selected_country).min(countries.len().saturating_sub(1));
-
-    let relations: Vec<(String, i32)> = if let Some(country) = countries.get(selected_idx) {
-        let mut pairs: Vec<_> = country
-            .relations()
-            .iter()
-            .map(|(name, value)| (name.clone(), *value))
-            .collect();
-        pairs.sort_by(|a, b| a.0.cmp(&b.0));
-        pairs
-    } else {
-        Vec::new()
-    };
+        .unwrap_or_default();
 
     let reports_view = (*reports)
         .iter()
@@ -360,14 +264,16 @@ fn app() -> Html {
         Html::default()
     };
 
-    let action_select_disabled =
-        countries.len() <= 1 && matches!((*action_form).kind, ActionKind::Diplomacy);
-
     html! {
-        <div class="app">
+        <div class="app" data-refresh={(*refresh).to_string()}>
             <header>
-                <h1>{ "リアル・ジオポリティクス シミュレーター" }</h1>
-                <p>{ format!("ターン {}", game_snapshot.turn()) }</p>
+                <div>
+                    <h1>{ "リアル・ジオポリティクス シミュレーター" }</h1>
+                    <p>{ format!("シミュレーション時間 {:.1} 分", countries_snapshot.simulation_minutes()) }</p>
+                </div>
+                <div class="summary">
+                    <span>{ "監視中の国家数: " }{ countries.len() }</span>
+                </div>
             </header>
 
             { message_view }
@@ -375,39 +281,24 @@ fn app() -> Html {
             <section class="controls">
                 <label>
                     { "対象国" }
-                    <select onchange={on_country_change.clone()} value={selected_idx.to_string()}>
+                    <select onchange={on_country_change.clone()} value={current_idx.to_string()}>
                         { for countries.iter().enumerate().map(|(idx, country)| {
                             html! { <option value={idx.to_string()}>{ format!("{}: {}", idx + 1, country.name) }</option> }
                         }) }
                     </select>
                 </label>
-
-                <label>
-                    { "行動" }
-                    <select onchange={on_action_change.clone()} value={(*action_form).kind.as_value()}>
-                        <option value="none">{ "選択なし" }</option>
-                        <option value="infra">{ "インフラ投資" }</option>
-                        <option value="mil">{ "軍事演習" }</option>
-                        <option value="wel">{ "社会福祉" }</option>
-                        <option value="dip" disabled={action_select_disabled}>{ "外交ミッション" }</option>
-                    </select>
-                </label>
-
-                <label>
-                    { "外交相手" }
-                    <select onchange={on_target_change.clone()} value={(*action_form).target_idx.to_string()} disabled={!matches!((*action_form).kind, ActionKind::Diplomacy)}>
-                        { for countries.iter().enumerate().map(|(idx, country)| {
-                            let disabled = idx == selected_idx;
-                            html! { <option value={idx.to_string()} disabled={disabled}>{ &country.name }</option> }
-                        }) }
-                    </select>
-                </label>
-
-                <div class="control-buttons">
-                    <button onclick={on_plan_action}>{ "行動を設定" }</button>
-                    <button onclick={on_cancel_action}>{ "予約解除" }</button>
-                    <button class="advance" onclick={on_advance_turn}>{ "ターンを進める" }</button>
+                <div class="allocation-summary">
+                    <span>{ format!("配分合計: {:.1}%", current_allocation.total()) }</span>
+                    <span>{ format!("未割当: {:.1}%", remaining) }</span>
                 </div>
+            </section>
+
+            <section class="sliders">
+                <h2>{ "予算配分" }</h2>
+                { render_slider("インフラ", current_allocation.infrastructure, current_idx, AllocationField::Infrastructure, update_slider.clone()) }
+                { render_slider("軍事", current_allocation.military, current_idx, AllocationField::Military, update_slider.clone()) }
+                { render_slider("福祉", current_allocation.welfare, current_idx, AllocationField::Welfare, update_slider.clone()) }
+                { render_slider("外交", current_allocation.diplomacy, current_idx, AllocationField::Diplomacy, update_slider.clone()) }
             </section>
 
             <section class="overview">
@@ -424,16 +315,11 @@ fn app() -> Html {
                             <th>{ "支持" }</th>
                             <th>{ "予算" }</th>
                             <th>{ "資源" }</th>
-                            <th>{ "次ターン行動" }</th>
                         </tr>
                     </thead>
                     <tbody>
                         { for countries.iter().enumerate().map(|(idx, country)| {
-                            let planned = country.planned_action().map(|action| match action {
-                                Action::Diplomacy { target } => format!("{} ({})", action.label(), target),
-                                _ => action.label().to_string(),
-                            }).unwrap_or_else(|| "未設定".to_string());
-                            let row_class = if idx == selected_idx { "selected" } else { "" };
+                            let row_class = if idx == current_idx { "selected" } else { "" };
                             html! {
                                 <tr class={row_class}>
                                     <td>{ idx + 1 }</td>
@@ -445,7 +331,6 @@ fn app() -> Html {
                                     <td>{ country.approval }</td>
                                     <td>{ format!("{:.1}", country.budget) }</td>
                                     <td>{ country.resources }</td>
-                                    <td>{ planned }</td>
                                 </tr>
                             }
                         }) }
@@ -454,7 +339,7 @@ fn app() -> Html {
             </section>
 
             <section class="relations">
-                <h2>{ format!("{} の外交関係", countries.get(selected_idx).map(|c| c.name.as_str()).unwrap_or("-")) }</h2>
+                <h2>{ format!("{} の外交関係", countries.get(current_idx).map(|c| c.name.as_str()).unwrap_or("-")) }</h2>
                 <ul>
                     { for relations.iter().map(|(partner, value)| {
                         html! { <li key={partner.clone()}>{ format!("{}: {}", partner, value) }</li> }
@@ -463,9 +348,51 @@ fn app() -> Html {
             </section>
 
             <section class="reports">
-                <h2>{ "最新ターンのレポート" }</h2>
+                <h2>{ "最新イベント" }</h2>
                 <ul>{ reports_view }</ul>
             </section>
+        </div>
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct SliderChange {
+    country_idx: usize,
+    field: AllocationField,
+    value: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_slider(
+    label: &str,
+    value: f64,
+    country_idx: usize,
+    field: AllocationField,
+    callback: Callback<SliderChange>,
+) -> Html {
+    let onchange = {
+        let callback = callback.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(input) = event
+                .target()
+                .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
+            {
+                if let Ok(value) = input.value().parse::<f64>() {
+                    callback.emit(SliderChange {
+                        country_idx,
+                        field,
+                        value,
+                    });
+                }
+            }
+        })
+    };
+
+    html! {
+        <div class="slider-row">
+            <label>{ format!("{}: {:.1}%", label, value) }</label>
+            <input type="range" min="0" max="100" step="1" value={format!("{:.0}", value)} oninput={onchange} />
         </div>
     }
 }

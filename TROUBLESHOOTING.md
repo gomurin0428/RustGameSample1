@@ -9,3 +9,4 @@
 - wasm 以外のターゲットで `cargo test` を動かす場合、`js_sys::Math::random` が使えないため `random_unit` などの乱数ヘルパーは `#[cfg(target_arch = "wasm32")]` と非 wasm 版の両方を定義してください。判定ロジックを追加する際も同じ分岐を忘れるとテストがクラッシュします。テストで wasm 専用のバリデーションを確認したいときは `cargo test --target wasm32-unknown-unknown` を使うと安全です。
 - `realgeopolitics` の CLI 版を起動する際は `config/countries.json` が必須です。ファイルが存在しない・JSON が壊れている場合は即座にエラー終了します。国を追加する時も JSON の配列構造と各フィールド名を崩さないよう注意してください。
 - ブラウザ版 (`realgeopolitics-web`) をビルドするには Rust の `wasm32-unknown-unknown` ターゲットと `trunk` コマンドが必要です。`cargo build -p realgeopolitics-web --target wasm32-unknown-unknown` で wasm のテストビルドができます。`trunk serve` を使う際は `realgeopolitics/web` ディレクトリで実行してください。
+- CLI 版で `set` コマンドを使う場合、合計が 100% を超えるとエラーになります。配分を細かく調整したいときは複数回に分けて設定するか、最初に大きめに下げてから増やしてください。Web 版は自動で正規化しますが意図しない縮小が入るので注意してください。

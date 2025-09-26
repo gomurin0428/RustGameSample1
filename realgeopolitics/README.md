@@ -1,12 +1,12 @@
 # Real Geopolitics Simulator
 
-`realgeopolitics` はコアロジックを共有しつつ、CLI 版 (`realgeopolitics-cli`) と Web GUI 版 (`realgeopolitics-web`) を持つワークスペース構成です。各国の主要指標を管理しながら、インフラ投資・軍事演習・社会福祉・外交ミッションといった政策をターン制で実行できます。
+`realgeopolitics` はコアロジックを共有しつつ、CLI 版 (`realgeopolitics-cli`) と Web GUI 版 (`realgeopolitics-web`) を持つワークスペース構成です。各国の予算配分をリアルタイムに調整し、インフラ・軍事・福祉・外交への投資比率が即座に指標へ反映されます。
 
 ## ワークスペース構成
 
 | クレート | 内容 |
 | --- | --- |
-| `core` | ゲームロジックとデータモデル (`GameState`, `Action` など) |
+| `core` | ゲームロジックとデータモデル (`GameState`, `BudgetAllocation` など) |
 | `cli` | ターミナルから操作する CLI インターフェース |
 | `web` | Yew + Trunk を用いたブラウザ向けフロントエンド |
 
@@ -17,7 +17,7 @@
    ```powershell
    & "C:\Users\gomur\.cargo\bin\cargo.exe" run -p realgeopolitics-cli
    ```
-3. プロンプトに `overview`, `inspect 1`, `plan 1 infrastructure`, `end` などのコマンドを入力して操作します。
+3. プロンプトに `overview`, `inspect 1`, `set 1 40 30 20 10`, `tick 30` などのコマンドを入力して操作します。`set` は百分率で配分を更新し、`tick` は指定分だけシミュレーションを進めます。
 
 ## Web 版の起動
 
@@ -30,7 +30,7 @@
    ```powershell
    trunk build --release
    ```
-3. ブラウザの GUI から各国の指標を確認しながら行動を設定し、`ターンを進める` ボタンで結果を確認できます。
+3. ブラウザの GUI から各国のスライダーを操作して配分を変更すると、即座にメトリクスが更新されます。画面下部のイベントログで最新の出来事を確認できます。
 
 ## テスト
 
