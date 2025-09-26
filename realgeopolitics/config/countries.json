@@ -1,0 +1,35 @@
+[
+  {
+    "name": "Asteria",
+    "government": "Parliamentary Republic",
+    "population_millions": 62.5,
+    "gdp": 2100.0,
+    "stability": 64,
+    "military": 55,
+    "approval": 52,
+    "budget": 620.0,
+    "resources": 75
+  },
+  {
+    "name": "Borealis Union",
+    "government": "Federal Technocracy",
+    "population_millions": 48.3,
+    "gdp": 1780.0,
+    "stability": 71,
+    "military": 68,
+    "approval": 47,
+    "budget": 540.0,
+    "resources": 92
+  },
+  {
+    "name": "Caldoria",
+    "government": "Constitutional Monarchy",
+    "population_millions": 35.9,
+    "gdp": 1330.0,
+    "stability": 58,
+    "military": 61,
+    "approval": 60,
+    "budget": 470.0,
+    "resources": 64
+  }
+]

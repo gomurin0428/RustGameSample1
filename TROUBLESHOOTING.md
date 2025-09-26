@@ -7,3 +7,4 @@
 - `trunk serve` / `trunk build` を使う場合は `trunk` と `wasm-bindgen-cli` がインストールされている必要があります。未導入なら `cargo install trunk wasm-bindgen-cli` を実行してください。
 - `CanvasRenderingContext2d::save` / `restore` / `stroke` は `()` を返すため、`expect` でラップするとコンパイルエラーになります。戻り値が無い API はそのまま呼び出し、異常系が必要なら `JsValue` を返す別 API を検討してください。
 - wasm 以外のターゲットで `cargo test` を動かす場合、`js_sys::Math::random` が使えないため `random_unit` などの乱数ヘルパーは `#[cfg(target_arch = "wasm32")]` と非 wasm 版の両方を定義してください。判定ロジックを追加する際も同じ分岐を忘れるとテストがクラッシュします。テストで wasm 専用のバリデーションを確認したいときは `cargo test --target wasm32-unknown-unknown` を使うと安全です。
+- `realgeopolitics` の CLI 版を起動する際は `config/countries.json` が必須です。ファイルが存在しない・JSON が壊れている場合は即座にエラー終了します。国を追加する時も JSON の配列構造と各フィールド名を崩さないよう注意してください。
