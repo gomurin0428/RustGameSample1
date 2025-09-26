@@ -120,3 +120,98 @@ impl SystemsFacade {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    use crate::game::economy::{CreditRating, FiscalAccount, TaxPolicy};
+    use crate::game::market::CommodityMarket;
+    use crate::game::{BudgetAllocation, CountryState};
+
+    fn sample_country(name: &str) -> CountryState {
+        CountryState::new(
+            name.to_string(),
+            "Republic".to_string(),
+            30.0,
+            1500.0,
+            60,
+            55,
+            50,
+            70,
+            FiscalAccount::new(300.0, CreditRating::BBB),
+            TaxPolicy::default(),
+            BudgetAllocation::default(),
+        )
+    }
+
+    #[test]
+    fn ensure_fiscal_prepared_tracks_state() {
+        let mut facade = SystemsFacade::new();
+        let mut countries = vec![sample_country("Asteria")];
+
+        assert!(facade.ensure_fiscal_prepared(&mut countries, 1.0));
+        assert!(!facade.ensure_fiscal_prepared(&mut countries, 1.0));
+
+        facade.finish_fiscal_cycle();
+        assert!(facade.ensure_fiscal_prepared(&mut countries, 1.0));
+    }
+
+    #[test]
+    fn process_economic_tick_resets_preparation_when_not_prepared() {
+        let mut facade = SystemsFacade::new();
+        let mut countries = vec![sample_country("Asteria"), sample_country("Borealis")];
+        let market = CommodityMarket::new(120.0, 7.5, 0.04);
+        let mut rng = SeedableRng::seed_from_u64(7);
+
+        let reports = facade.process_economic_tick(&mut countries, &market, &mut rng, 1.0);
+        assert!(facade.ensure_fiscal_prepared(&mut countries, 1.0));
+        assert!(reports.len() >= countries.len());
+    }
+
+    #[test]
+    fn process_economic_tick_preserves_prepared_state_when_already_prepared() {
+        let mut facade = SystemsFacade::new();
+        let mut countries = vec![sample_country("Asteria"), sample_country("Borealis")];
+        let market = CommodityMarket::new(120.0, 7.5, 0.04);
+        let mut rng = SeedableRng::seed_from_u64(11);
+
+        assert!(facade.ensure_fiscal_prepared(&mut countries, 1.0));
+        let _ = facade.process_economic_tick(&mut countries, &market, &mut rng, 1.0);
+        assert!(!facade.ensure_fiscal_prepared(&mut countries, 1.0));
+    }
+
+    #[test]
+    fn apply_industry_outcome_distributes_values() {
+        let mut facade = SystemsFacade::new();
+        let mut countries = vec![sample_country("Asteria"), sample_country("Borealis")];
+        let mut outcome = IndustryTickOutcome::default();
+        outcome.total_revenue = 200.0;
+        outcome.total_cost = 60.0;
+        outcome.total_gdp = 40.0;
+
+        let base = countries
+            .iter()
+            .map(|country| {
+                (
+                    country.total_revenue(),
+                    country.total_expense(),
+                    country.gdp,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        facade.apply_industry_outcome(&outcome, &mut countries);
+
+        let share_revenue = outcome.total_revenue / countries.len() as f64;
+        let share_cost = outcome.total_cost / countries.len() as f64;
+        let share_gdp = outcome.total_gdp / countries.len() as f64;
+
+        for (idx, country) in countries.iter().enumerate() {
+            assert!(country.total_revenue() >= base[idx].0 + share_revenue * 0.99);
+            assert!(country.total_expense() >= base[idx].1 + share_cost * 0.99);
+            assert!((country.gdp - (base[idx].2 + share_gdp)).abs() < 1e-6);
+        }
+    }
+}
