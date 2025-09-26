@@ -420,7 +420,7 @@ mod tests {
         let country = &game.countries()[0];
         assert_eq!(country.fiscal.credit_rating, baseline_rating);
         assert_eq!(country.stability, baseline_stability);
-        assert!(country.fiscal.debt >= 400.0);
+        assert!(!reports.iter().any(|report| report.contains("危機")));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::game::country::CountryState;
-use crate::game::economy::{CreditRating, RevenueKind};
+use crate::game::economy::{RevenueKind, downgrade_rating};
 use crate::game::{MAX_METRIC, MIN_METRIC};
 
 pub(crate) fn resolve(countries: &mut [CountryState]) -> Vec<String> {
@@ -59,25 +59,41 @@ pub(crate) fn resolve(countries: &mut [CountryState]) -> Vec<String> {
                 country.name
             ));
         }
+
+        let outcome = {
+            let country = &mut countries[idx];
+            country.fiscal_mut().update_fiscal_cycle(gdp)
+        };
+        if outcome.interest_paid > 0.0 {
+            reports.push(format!(
+                "{} は利払いとして {:.1} を支出しました。",
+                countries[idx].name, outcome.interest_paid
+            ));
+        }
+        if outcome.principal_repaid > 0.0 {
+            reports.push(format!(
+                "{} は元本償還に {:.1} を充当しました。",
+                countries[idx].name, outcome.principal_repaid
+            ));
+        }
+        if outcome.new_issuance > 0.0 {
+            reports.push(format!(
+                "{} は新たに {:.1} を起債し、流動性を確保しました。",
+                countries[idx].name, outcome.new_issuance
+            ));
+        }
+        if let Some(new_rating) = outcome.downgraded {
+            reports.push(format!(
+                "{} の信用格付けは {:?} に引き下げられました。",
+                countries[idx].name, new_rating
+            ));
+        }
+        if let Some(alert) = outcome.crisis {
+            reports.push(alert);
+        }
     }
 
     reports
-}
-
-pub(crate) fn downgrade_rating(rating: CreditRating) -> CreditRating {
-    use CreditRating::*;
-    match rating {
-        AAA => AA,
-        AA => A,
-        A => BBB,
-        BBB => BB,
-        BB => B,
-        B => CCC,
-        CCC => CC,
-        CC => C,
-        C => D,
-        D => D,
-    }
 }
 
 fn essential_administration_target(country: &CountryState) -> f64 {

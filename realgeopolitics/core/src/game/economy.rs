@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 const HOURS_PER_YEAR: f64 = 24.0 * 365.0;
+const DEBT_CYCLE_PER_YEAR: f64 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CreditRating {
@@ -64,6 +65,33 @@ pub struct ExpenseItem {
     pub kind: ExpenseKind,
     pub amount: f64,
 }
+
+#[derive(Debug, Clone)]
+pub struct DebtCycleOutcome {
+    pub interest_due: f64,
+    pub interest_paid: f64,
+    pub principal_repaid: f64,
+    pub new_issuance: f64,
+    pub downgraded: Option<CreditRating>,
+    pub crisis: Option<String>,
+}
+
+pub(crate) fn downgrade_rating(rating: CreditRating) -> CreditRating {
+    use CreditRating::*;
+    match rating {
+        AAA => AA,
+        AA => A,
+        A => BBB,
+        BBB => BB,
+        BB => B,
+        B => CCC,
+        CCC => CC,
+        CC => C,
+        C => D,
+        D => D,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FiscalAccount {
     cash_reserve: f64,
@@ -140,6 +168,100 @@ impl FiscalAccount {
             self.record_expense(ExpenseKind::DebtService, interest);
         }
         interest
+    }
+
+    pub fn update_fiscal_cycle(&mut self, gdp: f64) -> DebtCycleOutcome {
+        if !gdp.is_finite() || gdp < 0.0 {
+            panic!("update_fiscal_cycle に不正な GDP が渡されました");
+        }
+
+        let mut debt_ratio = if gdp > 0.0 {
+            (self.debt / gdp).max(0.0)
+        } else if self.debt > 0.0 {
+            5.0
+        } else {
+            0.0
+        };
+
+        let base_rate = self.credit_rating.base_interest_rate();
+        let risk_surcharge = (debt_ratio - 0.6).max(0.0) * 0.03;
+        self.interest_rate = (base_rate + risk_surcharge).min(0.30);
+
+        let interest_due = self.debt * self.interest_rate / DEBT_CYCLE_PER_YEAR;
+        let mut interest_paid = 0.0;
+        let mut unpaid_interest = 0.0;
+        if interest_due > 0.0 {
+            let payable = self.cash_reserve.min(interest_due);
+            if payable > 0.0 {
+                self.record_expense(ExpenseKind::DebtService, payable);
+                interest_paid = payable;
+            }
+            unpaid_interest = interest_due - payable;
+            if unpaid_interest > 0.0 {
+                self.debt += unpaid_interest;
+            }
+        }
+
+        let mut principal_repaid = 0.0;
+        if self.debt > 0.0 {
+            let amort_target = (self.debt * 0.01).min(self.cash_reserve * 0.5);
+            if amort_target > 0.0 {
+                self.record_expense(ExpenseKind::DebtService, amort_target);
+                self.debt = (self.debt - amort_target).max(0.0);
+                principal_repaid = amort_target;
+            }
+        }
+
+        let safety_reserve = (gdp * 0.04).max(25.0);
+        let mut new_issuance = 0.0;
+        if self.cash_reserve < safety_reserve {
+            let needed = safety_reserve - self.cash_reserve;
+            if needed > 0.0 {
+                self.add_debt(needed);
+                self.record_revenue(RevenueKind::Other, needed);
+                new_issuance = needed;
+            }
+        }
+
+        debt_ratio = if gdp > 0.0 {
+            (self.debt / gdp).max(0.0)
+        } else if self.debt > 0.0 {
+            5.0
+        } else {
+            0.0
+        };
+
+        let mut downgraded = None;
+        let mut crisis = None;
+
+        if debt_ratio > 1.1 || unpaid_interest > interest_due * 0.25 {
+            let previous = self.credit_rating;
+            let new_rating = downgrade_rating(previous);
+            if new_rating != previous {
+                self.set_credit_rating(new_rating);
+                downgraded = Some(new_rating);
+                crisis = Some(format!(
+                    "債務比率が {:.0}% に達し、信用格付けが {:?} から {:?} に低下しました。",
+                    (debt_ratio * 100.0).round(),
+                    previous,
+                    new_rating
+                ));
+            } else {
+                crisis = Some(format!(
+                    "債務比率が {:.0}% に達し、危機的水準です。",
+                    (debt_ratio * 100.0).round()
+                ));
+            }
+        }
+
+        DebtCycleOutcome {
+            interest_due,
+            interest_paid,
+            principal_repaid,
+            new_issuance,
+            downgraded,
+            crisis,
+        }
     }
 
     pub fn add_debt(&mut self, delta: f64) {
@@ -251,5 +373,31 @@ impl TaxPolicy {
 
     pub fn pending_revenue(&self) -> f64 {
         self.lagged_revenue
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_fiscal_cycle_pays_interest_and_reduces_debt() {
+        let mut account = FiscalAccount::new(300.0, CreditRating::BBB);
+        account.debt = 1_200.0;
+        let outcome = account.update_fiscal_cycle(1_800.0);
+        assert!(outcome.interest_due > 0.0);
+        assert!(outcome.interest_paid > 0.0);
+        assert!(outcome.principal_repaid >= 0.0);
+        assert!(account.debt >= 0.0);
+    }
+
+    #[test]
+    fn update_fiscal_cycle_triggers_crisis_on_excess_debt() {
+        let mut account = FiscalAccount::new(50.0, CreditRating::BBB);
+        account.debt = 2_500.0;
+        let outcome = account.update_fiscal_cycle(1_500.0);
+        assert!(outcome.crisis.is_some());
+        assert!(matches!(outcome.downgraded, Some(_)));
+        assert!(account.interest_rate >= account.credit_rating.base_interest_rate());
     }
 }
