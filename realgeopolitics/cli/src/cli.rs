@@ -130,10 +130,11 @@ fn print_overview(game: &GameState) {
         .map(|m| format!("{:.1} 分", m as f64))
         .unwrap_or_else(|| "未定".to_string());
     println!(
-        "シミュレーション時間: {:.1} 分 (倍率 x{:.2}) / 次イベントまで: {}",
+        "シミュレーション時間: {:.1} 分 (倍率 x{:.2}) / 次イベントまで: {} / 資源価格 {:.1}",
         game.simulation_minutes(),
         game.time_multiplier(),
-        next_event
+        next_event,
+        game.commodity_price()
     );
     println!(
         "ID | {:<18} | {:<22} | {:>9} | {:>4} | {:>4} | {:>4} | {:>9} | alloc(i/m/w/d)",

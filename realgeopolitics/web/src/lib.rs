@@ -293,6 +293,7 @@ fn app() -> Html {
     let speed_value_str = format!("{:.2}", speed_value);
     let speed_presets: &[(f64, &str)] =
         &[(0.5, "低速"), (1.0, "標準"), (2.0, "高速"), (4.0, "超高速")];
+    let commodity_price = countries_snapshot.commodity_price();
     let speed_options = build_speed_options(speed_value, speed_presets);
     let current_idx = (*selected_country).min(countries.len().saturating_sub(1));
     let current_allocation = allocation_forms
@@ -352,6 +353,7 @@ fn app() -> Html {
                 <div class="summary">
                     <span>{ "監視中の国家数: " }{ countries.len() }</span>
                     <span>{ format!("時間倍率: x{:.2}", speed_value) }</span>
+                    <span>{ format!("資源価格: {:.1}", commodity_price) }</span>
                     <label class="speed-control">
                         { "速度" }
                         <select onchange={on_speed_change.clone()} value={speed_value_str.clone()}>

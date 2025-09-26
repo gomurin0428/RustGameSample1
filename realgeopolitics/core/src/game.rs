@@ -274,6 +274,63 @@ impl TaxPolicy {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CommodityMarket {
+    price: f64,
+    base_price: f64,
+    volatility: f64,
+    shock_chance: f64,
+}
+
+impl CommodityMarket {
+    pub fn new(base_price: f64, volatility: f64, shock_chance: f64) -> Self {
+        Self {
+            price: base_price.max(1.0),
+            base_price: base_price.max(1.0),
+            volatility: volatility.max(0.1),
+            shock_chance: shock_chance.clamp(0.0, 1.0),
+        }
+    }
+
+    pub fn price(&self) -> f64 {
+        self.price
+    }
+
+    pub fn update(&mut self, rng: &mut StdRng, scale: f64) -> Option<String> {
+        let adjusted_scale = scale.max(0.25);
+        let drift = (self.base_price - self.price) * 0.02 * adjusted_scale;
+        let random_step = rng.gen_range(-self.volatility..self.volatility) * adjusted_scale.sqrt();
+        let mut new_price = self.price + drift + random_step;
+
+        let shock_triggered = rng.gen_bool((self.shock_chance * adjusted_scale).clamp(0.0, 1.0));
+        let mut message = None;
+        if shock_triggered {
+            let shock_multiplier = if rng.gen_bool(0.5) { 1.35 } else { 0.7 };
+            new_price *= shock_multiplier;
+            message = Some(if shock_multiplier > 1.0 {
+                format!(
+                    "資源市場に価格高騰ショックが発生しました (倍率 x{:.2})",
+                    shock_multiplier
+                )
+            } else {
+                format!(
+                    "資源市場で価格急落イベントが発生しました (倍率 x{:.2})",
+                    shock_multiplier
+                )
+            });
+        }
+
+        self.price = new_price.clamp(self.base_price * 0.4, self.base_price * 1.9);
+        message
+    }
+
+    pub fn revenue_for(&self, resource_index: i32, scale: f64) -> f64 {
+        let resources = resource_index.max(0) as f64;
+        let export_volume = resources * 0.45;
+        (self.price * export_volume * scale).max(0.0)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountryDefinition {
     pub name: String,
@@ -408,6 +465,7 @@ pub struct GameState {
     rng: StdRng,
     scheduler: Scheduler,
     countries: Vec<CountryState>,
+    commodity_market: CommodityMarket,
     fiscal_prepared: bool,
 }
 
@@ -487,6 +545,8 @@ impl GameState {
                 .with_schedule(ScheduleSpec::EveryMinutes((BASE_TICK_MINUTES * 6.0) as u64)),
         );
 
+        let commodity_market = CommodityMarket::new(120.0, 7.5, 0.04);
+
         Ok(Self {
             clock: GameClock::new(),
             calendar: CalendarDate::from_start(),
@@ -495,6 +555,7 @@ impl GameState {
             rng,
             scheduler,
             countries,
+            commodity_market,
             fiscal_prepared: false,
         })
     }
@@ -513,6 +574,10 @@ impl GameState {
 
     pub fn calendar_date(&self) -> CalendarDate {
         self.calendar
+    }
+
+    pub fn commodity_price(&self) -> f64 {
+        self.commodity_market.price()
     }
 
     pub fn time_multiplier(&self) -> f64 {
@@ -597,6 +662,10 @@ impl GameState {
         if !self.fiscal_prepared {
             self.prepare_all_fiscal_flows(scale);
             self.fiscal_prepared = true;
+        }
+
+        if let Some(market_report) = self.commodity_market.update(&mut self.rng, scale) {
+            reports.push(market_report);
         }
 
         let ready_tasks = self.scheduler.next_ready_tasks(&self.clock);
@@ -779,12 +848,17 @@ impl GameState {
         let allocation = self.countries[idx].allocations();
         let total_allocation = allocation.total();
 
-        let resource_revenue = (resources as f64 * 0.6 * scale).max(0.0);
+        let resource_revenue = self.commodity_market.revenue_for(resources, scale);
         if resource_revenue > 0.0 {
+            let price_snapshot = self.commodity_market.price();
             let country = &mut self.countries[idx];
             country
                 .fiscal
                 .record_revenue(RevenueKind::ResourceExport, resource_revenue);
+            reports.push(format!(
+                "{} は資源輸出で {:.1} の外貨収入を獲得しました (単価 {:.1})",
+                country.name, resource_revenue, price_snapshot
+            ));
         }
 
         if total_allocation <= f64::EPSILON {
@@ -1301,8 +1375,29 @@ mod tests {
     }
 
     #[test]
+    fn commodity_market_generates_resource_revenue() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 11).unwrap();
+        {
+            let countries = game.countries_mut();
+            let policy = countries[0].tax_policy_mut();
+            policy.income_rate = 0.0;
+            policy.corporate_rate = 0.0;
+            policy.consumption_rate = 0.0;
+        }
+        let before_cash = game.countries()[0].cash_reserve();
+        let initial_price = game.commodity_price();
+        game.tick_minutes(60.0).unwrap();
+        let country = &game.countries()[0];
+        assert!(country.cash_reserve() > before_cash);
+        assert!(country.total_revenue() > 0.0);
+        let updated_price = game.commodity_price();
+        assert!(updated_price > 0.0);
+        assert!((updated_price - initial_price).abs() > 0.01 || updated_price != initial_price);
+    }
+
+    #[test]
     fn next_event_minutes_reports_difference() {
-        let game = GameState::from_definitions_with_seed(sample_definitions(), 11).unwrap();
+        let game = GameState::from_definitions_with_seed(sample_definitions(), 12).unwrap();
         let next = game.next_event_minutes().unwrap();
         assert!(next > 0);
     }
