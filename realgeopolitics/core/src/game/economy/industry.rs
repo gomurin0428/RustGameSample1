@@ -456,6 +456,20 @@ impl IndustryRuntime {
     pub fn energy_cost_index(&self) -> f64 {
         self.energy_cost_index
     }
+
+    #[cfg(test)]
+    pub fn set_modifier_for_test(
+        &mut self,
+        id: &SectorId,
+        subsidy_bonus: f64,
+        efficiency_bonus: f64,
+        duration_minutes: f64,
+    ) {
+        let modifier = self.modifiers.entry(id.clone()).or_default();
+        modifier.subsidy_bonus = subsidy_bonus;
+        modifier.efficiency_bonus = efficiency_bonus;
+        modifier.remaining_minutes = duration_minutes.max(0.0);
+    }
 }
 
 fn sigmoid_price(signal: f64, sensitivity: f64) -> f64 {

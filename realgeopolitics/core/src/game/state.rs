@@ -443,6 +443,7 @@ impl ScheduledTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::{IndustryCategory, SectorId};
     use crate::scheduler::{ONE_YEAR_MINUTES, ScheduleSpec};
 
     fn sample_definitions() -> Vec<CountryDefinition> {
@@ -624,6 +625,45 @@ mod tests {
     }
 
     #[test]
+    fn industry_tick_increases_gdp_and_records_revenue() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 42).unwrap();
+        let before_gdp = game.countries()[0].gdp;
+        let before_cash = game.countries()[0].cash_reserve();
+        let reports = game.tick_minutes(60.0).expect("tick");
+        assert!(reports.iter().any(|r| r.contains("生産量")));
+        let after_gdp = game.countries()[0].gdp;
+        let after_cash = game.countries()[0].cash_reserve();
+        assert!(after_gdp > before_gdp);
+        assert!(after_cash > before_cash);
+    }
+
+    #[test]
+    fn energy_shortage_penalises_downstream_sectors() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 43).unwrap();
+        let auto_id = SectorId::new(IndustryCategory::Secondary, "automotive");
+        let mut baseline = GameState::from_definitions_with_seed(sample_definitions(), 45).unwrap();
+        baseline.tick_minutes(60.0).unwrap();
+        let baseline_output = baseline
+            .industry_runtime
+            .metrics()
+            .get(&auto_id)
+            .map(|m| m.output)
+            .unwrap_or(0.0);
+
+        let energy_id = SectorId::new(IndustryCategory::Energy, "electricity");
+        game.industry_runtime
+            .set_modifier_for_test(&energy_id, 0.0, -0.8, 120.0);
+        game.tick_minutes(60.0).unwrap();
+        let reduced_output = game
+            .industry_runtime
+            .metrics()
+            .get(&auto_id)
+            .map(|m| m.output)
+            .unwrap_or(0.0);
+        assert!(reduced_output < baseline_output);
+    }
+
+    #[test]
     fn scheduled_task_event_trigger_penalises_low_stability() {
         let mut game = GameState::from_definitions_with_seed(sample_definitions(), 4).unwrap();
         {
@@ -676,6 +716,31 @@ mod tests {
             .copied()
             .unwrap();
         assert!(relation < 90);
+    }
+
+    #[test]
+    fn subsidies_reduce_costs_over_time() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 44).unwrap();
+        let steel_id = SectorId::new(IndustryCategory::Secondary, "steel");
+        let mut baseline = GameState::from_definitions_with_seed(sample_definitions(), 46).unwrap();
+        baseline.tick_minutes(60.0).unwrap();
+        let baseline_cost = baseline
+            .industry_runtime
+            .metrics()
+            .get(&steel_id)
+            .map(|m| m.cost)
+            .unwrap_or(0.0);
+
+        game.industry_runtime
+            .set_modifier_for_test(&steel_id, 0.5, 0.0, 180.0);
+        game.tick_minutes(60.0).unwrap();
+        let after_cost = game
+            .industry_runtime
+            .metrics()
+            .get(&steel_id)
+            .map(|m| m.cost)
+            .unwrap_or(0.0);
+        assert!(after_cost < baseline_cost);
     }
 
     #[test]
