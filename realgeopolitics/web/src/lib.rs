@@ -15,7 +15,7 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use web_sys::{Event, HtmlInputElement, HtmlSelectElement, InputEvent};
+use web_sys::{Event, HtmlInputElement, HtmlSelectElement, InputEvent, MouseEvent};
 #[cfg(target_arch = "wasm32")]
 use yew::prelude::*;
 
@@ -172,6 +172,42 @@ enum AllocationField {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, PartialEq)]
+enum MainTab {
+    Controls,
+    Metrics,
+    Diplomacy,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl MainTab {
+    fn label(self) -> &'static str {
+        match self {
+            MainTab::Controls => "コントロール",
+            MainTab::Metrics => "主要指標",
+            MainTab::Diplomacy => "外交・イベント",
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, PartialEq)]
+enum DashboardTab {
+    DebtTrend,
+    FiscalFlow,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl DashboardTab {
+    fn label(self) -> &'static str {
+        match self {
+            DashboardTab::DebtTrend => "債務比率",
+            DashboardTab::FiscalFlow => "財政レポート",
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 #[function_component(App)]
 fn app() -> Html {
     let initial_definitions = load_default_definitions().expect("国データの読み込みに失敗しました");
@@ -196,6 +232,8 @@ fn app() -> Html {
     let message = use_state(|| Option::<String>::None);
     let reports = use_state(Vec::<String>::new);
     let refresh = use_state(|| 0u32);
+    let main_tab = use_state(|| MainTab::Controls);
+    let dashboard_tab = use_state(|| DashboardTab::DebtTrend);
 
     {
         let game = game.clone();
@@ -422,29 +460,45 @@ fn app() -> Html {
         })
         .collect();
 
-    html! {
-        <div class="app" data-refresh={(*refresh).to_string()}>
-            <header>
-                <div class="time-panel">
-                    <h1>{ "リアル・ジオポリティクス シミュレーター" }</h1>
-                    <p>{ format!("シミュレーション時間 {:.1} 分 (日付 {:04}-{:02}-{:02})", sim_minutes, calendar.year, calendar.month, calendar.day) }</p>
-                    <p>{ format!("次イベントまで: {}", next_event) }</p>
-                </div>
-                <div class="summary">
-                    <span>{ "監視中の国家数: " }{ countries.len() }</span>
-                    <span>{ format!("時間倍率: x{:.2}", speed_value) }</span>
-                    <span>{ format!("資源価格: {:.1}", commodity_price) }</span>
-                    <label class="speed-control">
-                        { "速度" }
-                        <select onchange={on_speed_change.clone()} value={speed_value_str.clone()}>
-                            { for speed_option_nodes.iter().cloned() }
-                        </select>
-                    </label>
-                </div>
-            </header>
+    let main_tab_buttons = {
+        let controls_class = if *main_tab == MainTab::Controls {
+            "main-tab-button active"
+        } else {
+            "main-tab-button"
+        };
+        let metrics_class = if *main_tab == MainTab::Metrics {
+            "main-tab-button active"
+        } else {
+            "main-tab-button"
+        };
+        let diplomacy_class = if *main_tab == MainTab::Diplomacy {
+            "main-tab-button active"
+        } else {
+            "main-tab-button"
+        };
+        let on_controls = {
+            let main_tab = main_tab.clone();
+            Callback::from(move |_event: MouseEvent| main_tab.set(MainTab::Controls))
+        };
+        let on_metrics = {
+            let main_tab = main_tab.clone();
+            Callback::from(move |_event: MouseEvent| main_tab.set(MainTab::Metrics))
+        };
+        let on_diplomacy = {
+            let main_tab = main_tab.clone();
+            Callback::from(move |_event: MouseEvent| main_tab.set(MainTab::Diplomacy))
+        };
+        html! {
+            <div class="main-tabs">
+                <button class={controls_class} onclick={on_controls}>{ MainTab::Controls.label() }</button>
+                <button class={metrics_class} onclick={on_metrics}>{ MainTab::Metrics.label() }</button>
+                <button class={diplomacy_class} onclick={on_diplomacy}>{ MainTab::Diplomacy.label() }</button>
+            </div>
+        }
+    };
 
-            { message_view }
-
+    let controls_tab_content = html! {
+        <>
             <section class="controls">
                 <label>
                     { "対象国" }
@@ -470,62 +524,70 @@ fn app() -> Html {
                 { render_amount_input("行政維持", current_allocation.administration, current_idx, AllocationField::Administration, update_amount.clone()) }
                 { render_amount_input("研究開発", current_allocation.research, current_idx, AllocationField::Research, update_amount.clone()) }
             </section>
+        </>
+    };
 
-            <section class="overview">
-                <h2>{ "主要指標" }</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>{ "ID" }</th>
-                            <th>{ "国名" }</th>
-                            <th>{ "政体" }</th>
-                            <th>{ "GDP" }</th>
-                            <th>{ "安定" }</th>
-                            <th>{ "軍事" }</th>
-                            <th>{ "支持" }</th>
-                            <th>{ "予算残高" }</th>
-                            <th>{ "収入" }</th>
-                            <th>{ "支出" }</th>
-                            <th>{ "資源" }</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        { for countries.iter().enumerate().map(|(idx, country)| {
-                            let row_class = if idx == current_idx { "selected" } else { "" };
-                            html! {
-                                <tr class={row_class}>
-                                    <td>{ idx + 1 }</td>
-                                    <td>{ &country.name }</td>
-                                    <td>{ &country.government }</td>
-                                    <td>{ format!("{:.1}", country.gdp) }</td>
-                                    <td>{ country.stability }</td>
-                                    <td>{ country.military }</td>
-                                    <td>{ country.approval }</td>
-                                    <td>{ format!("{:.1}", country.cash_reserve()) }</td>
-                                    <td>{ format!("{:.1}", country.total_revenue()) }</td>
-                                    <td>{ format!("{:.1}", country.total_expense()) }</td>
-                                    <td>{ country.resources }</td>
-                                </tr>
-                            }
-                        }) }
-                    </tbody>
-                </table>
-            </section>
+    let metrics_tab_content = {
+        let dashboard_section = render_dashboard(
+            *dashboard_tab,
+            dashboard_tab.clone(),
+            gdp_value,
+            cash_value,
+            debt_value,
+            approval_value,
+            debt_ratio_value,
+            &dashboard_trend,
+            current_snapshot,
+        );
+        html! {
+            <>
+                <section class="overview">
+                    <h2>{ "主要指標" }</h2>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>{ "ID" }</th>
+                                <th>{ "国名" }</th>
+                                <th>{ "政体" }</th>
+                                <th>{ "GDP" }</th>
+                                <th>{ "安定" }</th>
+                                <th>{ "軍事" }</th>
+                                <th>{ "支持" }</th>
+                                <th>{ "予算残高" }</th>
+                                <th>{ "収入" }</th>
+                                <th>{ "支出" }</th>
+                                <th>{ "資源" }</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            { for countries.iter().enumerate().map(|(idx, country)| {
+                                let row_class = if idx == current_idx { "selected" } else { "" };
+                                html! {
+                                    <tr class={row_class}>
+                                        <td>{ idx + 1 }</td>
+                                        <td>{ &country.name }</td>
+                                        <td>{ &country.government }</td>
+                                        <td>{ format!("{:.1}", country.gdp) }</td>
+                                        <td>{ country.stability }</td>
+                                        <td>{ country.military }</td>
+                                        <td>{ country.approval }</td>
+                                        <td>{ format!("{:.1}", country.cash_reserve()) }</td>
+                                        <td>{ format!("{:.1}", country.total_revenue()) }</td>
+                                        <td>{ format!("{:.1}", country.total_expense()) }</td>
+                                        <td>{ country.resources }</td>
+                                    </tr>
+                                }
+                            }) }
+                        </tbody>
+                    </table>
+                </section>
+                { dashboard_section }
+            </>
+        }
+    };
 
-            { render_dashboard(
-                gdp_value,
-                cash_value,
-                debt_value,
-                approval_value,
-                debt_ratio_value,
-                &dashboard_trend,
-            ) }
-
-            <section class="fiscal-report">
-                <h2>{ format!("財政レポート ({})", current_snapshot.name) }</h2>
-                { render_fiscal_chart(current_snapshot) }
-            </section>
-
+    let diplomacy_tab_content = html! {
+        <>
             <section class="relations">
                 <h2>{ format!("{} の外交関係", countries.get(current_idx).map(|c| c.name.as_str()).unwrap_or("-")) }</h2>
                 <ul>
@@ -537,8 +599,45 @@ fn app() -> Html {
 
             <section class="reports">
                 <h2>{ "最新イベント" }</h2>
-                <ul>{ reports_view }</ul>
+                <ul>{ reports_view.clone() }</ul>
             </section>
+        </>
+    };
+
+    let tab_body = match *main_tab {
+        MainTab::Controls => controls_tab_content,
+        MainTab::Metrics => metrics_tab_content,
+        MainTab::Diplomacy => diplomacy_tab_content,
+    };
+
+    html! {
+        <div class="app" data-refresh={(*refresh).to_string()}>
+            <header>
+                <div class="time-panel">
+                    <h1>{ "リアル・ジオポリティクス シミュレーター" }</h1>
+                    <p>{ format!("シミュレーション時間 {:.1} 分 (日付 {:04}-{:02}-{:02})", sim_minutes, calendar.year, calendar.month, calendar.day) }</p>
+                    <p>{ format!("次イベントまで: {}", next_event) }</p>
+                </div>
+                <div class="summary">
+                    <span>{ "監視中の国家数: " }{ countries.len() }</span>
+                    <span>{ format!("時間倍率: x{:.2}", speed_value) }</span>
+                    <span>{ format!("資源価格: {:.1}", commodity_price) }</span>
+                    <label class="speed-control">
+                        { "速度" }
+                        <select onchange={on_speed_change.clone()} value={speed_value_str.clone()}>
+                            { for speed_option_nodes.iter().cloned() }
+                        </select>
+                    </label>
+                </div>
+            </header>
+
+            { message_view }
+
+            { main_tab_buttons }
+
+            <div class="tab-container">
+                { tab_body }
+            </div>
         </div>
     }
 }
@@ -812,15 +911,84 @@ mod wasm_tests {
 }
 #[cfg(target_arch = "wasm32")]
 fn render_dashboard(
+    selected_tab: DashboardTab,
+    handle: UseStateHandle<DashboardTab>,
     gdp: f64,
     cash: f64,
     debt: f64,
     approval: f64,
     debt_ratio: f64,
     trend_points: &[FiscalTrendPoint],
+    snapshot: &FiscalSnapshot,
 ) -> Html {
     if trend_points.is_empty() {
         panic!("トレンドデータが不足しています");
+    }
+
+    let debt_class = if selected_tab == DashboardTab::DebtTrend {
+        "dashboard-tab-button active"
+    } else {
+        "dashboard-tab-button"
+    };
+    let fiscal_class = if selected_tab == DashboardTab::FiscalFlow {
+        "dashboard-tab-button active"
+    } else {
+        "dashboard-tab-button"
+    };
+
+    let on_debt_tab = {
+        let handle = handle.clone();
+        Callback::from(move |_event: MouseEvent| handle.set(DashboardTab::DebtTrend))
+    };
+    let on_fiscal_tab = {
+        let handle = handle.clone();
+        Callback::from(move |_event: MouseEvent| handle.set(DashboardTab::FiscalFlow))
+    };
+
+    let graph = match selected_tab {
+        DashboardTab::DebtTrend => render_debt_ratio_chart(trend_points, debt_ratio),
+        DashboardTab::FiscalFlow => render_fiscal_chart(snapshot),
+    };
+
+    let balance = cash - debt;
+
+    html! {
+        <section class="dashboard">
+            <h2>{ "ダッシュボード" }</h2>
+            <div class="metrics-cards">
+                <div class="metric-card">
+                    <span class="label">{ "GDP" }</span>
+                    <span class="value">{ format_compact_number(gdp) }</span>
+                </div>
+                <div class="metric-card">
+                    <span class="label">{ "バランスシート" }</span>
+                    <span class="value">{ format_balance(balance) }</span>
+                    <span class="sub">{ format!("現金 {:.1} / 債務 {:.1}", cash, debt) }</span>
+                </div>
+                <div class="metric-card">
+                    <span class="label">{ "債務比率" }</span>
+                    <span class="value">{ format_ratio(debt_ratio) }</span>
+                </div>
+                <div class="metric-card">
+                    <span class="label">{ "世論指数" }</span>
+                    <span class="value">{ format!("{:.0}", approval) }</span>
+                </div>
+            </div>
+            <div class="dashboard-tabs">
+                <button class={debt_class} onclick={on_debt_tab}>{ DashboardTab::DebtTrend.label() }</button>
+                <button class={fiscal_class} onclick={on_fiscal_tab}>{ DashboardTab::FiscalFlow.label() }</button>
+            </div>
+            <div class="dashboard-content">
+                { graph }
+            </div>
+        </section>
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_debt_ratio_chart(trend_points: &[FiscalTrendPoint], fallback_ratio: f64) -> Html {
+    if trend_points.is_empty() {
+        panic!("債務比率トレンドのデータが不足しています");
     }
     let width = 360.0;
     let height = 160.0;
@@ -894,58 +1062,35 @@ fn render_dashboard(
         grid_lines.push((line_y, ratio));
     }
 
-    let balance = cash - debt;
-    let latest_ratio = *ratios.last().unwrap_or(&debt_ratio);
+    let latest_ratio = *ratios.last().unwrap_or(&fallback_ratio);
 
     html! {
-        <section class="dashboard">
-            <h2>{ "ダッシュボード" }</h2>
-            <div class="metrics-cards">
-                <div class="metric-card">
-                    <span class="label">{ "GDP" }</span>
-                    <span class="value">{ format_compact_number(gdp) }</span>
-                </div>
-                <div class="metric-card">
-                    <span class="label">{ "バランスシート" }</span>
-                    <span class="value">{ format_balance(balance) }</span>
-                    <span class="sub">{ format!("現金 {:.1} / 債務 {:.1}", cash, debt) }</span>
-                </div>
-                <div class="metric-card">
-                    <span class="label">{ "債務比率" }</span>
-                    <span class="value">{ format_ratio(debt_ratio) }</span>
-                </div>
-                <div class="metric-card">
-                    <span class="label">{ "世論指数" }</span>
-                    <span class="value">{ format!("{:.0}", approval) }</span>
-                </div>
+        <div class="trend-chart">
+            <h3>{ "債務比率トレンド (直近12 Tick)" }</h3>
+            <svg viewBox={format!("0 0 {:.0} {:.0}", width, height)} preserveAspectRatio="none">
+                <rect x="0" y="0" width={format!("{:.0}", width)} height={format!("{:.0}", height)} fill="none" stroke="#dddddd" stroke-width="0.5" />
+                <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", top_margin)} x2={format!("{:.2}", left_margin)} y2={format!("{:.2}", top_margin + plot_height)} stroke="#cccccc" stroke-width="1" />
+                <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", top_margin + plot_height)} x2={format!("{:.2}", left_margin + plot_width)} y2={format!("{:.2}", top_margin + plot_height)} stroke="#cccccc" stroke-width="1" />
+                { for grid_lines.iter().map(|(line_y, value)| {
+                    html! {
+                        <g>
+                            <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", line_y)} x2={format!("{:.2}", left_margin + plot_width)} y2={format!("{:.2}", line_y)} stroke="#eeeeee" stroke-width="0.5" />
+                            <text x={format!("{:.2}", 2.0)} y={format!("{:.2}", line_y + 4.0)} class="axis-label">{ format!("{:.0}%", value) }</text>
+                        </g>
+                    }
+                }) }
+                <path d={path} stroke="#8e44ad" stroke-width="2" fill="none" />
+                { for ratios.iter().enumerate().map(|(idx, ratio)| {
+                    html! {
+                        <circle cx={format!("{:.2}", map_x(idx))} cy={format!("{:.2}", map_y(*ratio))} r="2.5" fill="#8e44ad" />
+                    }
+                }) }
+            </svg>
+            <div class="trend-summary">
+                <span>{ format!("最新債務比率: {}", format_ratio(latest_ratio)) }</span>
+                <span>{ format!("データ点: {}", trend_points.len()) }</span>
             </div>
-            <div class="trend-chart">
-                <h3>{ "債務比率トレンド (直近12 Tick)" }</h3>
-                <svg viewBox={format!("0 0 {:.0} {:.0}", width, height)} preserveAspectRatio="none">
-                    <rect x="0" y="0" width={format!("{:.0}", width)} height={format!("{:.0}", height)} fill="none" stroke="#dddddd" stroke-width="0.5" />
-                    <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", top_margin)} x2={format!("{:.2}", left_margin)} y2={format!("{:.2}", top_margin + plot_height)} stroke="#cccccc" stroke-width="1" />
-                    <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", top_margin + plot_height)} x2={format!("{:.2}", left_margin + plot_width)} y2={format!("{:.2}", top_margin + plot_height)} stroke="#cccccc" stroke-width="1" />
-                    { for grid_lines.iter().map(|(line_y, value)| {
-                        html! {
-                            <g>
-                                <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", line_y)} x2={format!("{:.2}", left_margin + plot_width)} y2={format!("{:.2}", line_y)} stroke="#eeeeee" stroke-width="0.5" />
-                                <text x={format!("{:.2}", 2.0)} y={format!("{:.2}", line_y + 4.0)} class="axis-label">{ format!("{:.0}%", value) }</text>
-                            </g>
-                        }
-                    }) }
-                    <path d={path} stroke="#8e44ad" stroke-width="2" fill="none" />
-                    { for ratios.iter().enumerate().map(|(idx, ratio)| {
-                        html! {
-                            <circle cx={format!("{:.2}", map_x(idx))} cy={format!("{:.2}", map_y(*ratio))} r="2.5" fill="#8e44ad" />
-                        }
-                    }) }
-                </svg>
-                <div class="trend-summary">
-                    <span>{ format!("最新債務比率: {}", format_ratio(latest_ratio)) }</span>
-                    <span>{ format!("データ点: {}", trend_points.len()) }</span>
-                </div>
-            </div>
-        </section>
+        </div>
     }
 }
 #[cfg(target_arch = "wasm32")]
