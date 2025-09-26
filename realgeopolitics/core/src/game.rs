@@ -164,6 +164,116 @@ impl FiscalAccount {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct TaxOutcome {
+    pub immediate: f64,
+    pub deferred: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TaxPolicyConfig {
+    #[serde(default = "TaxPolicy::default_income_rate")]
+    pub income_rate: f64,
+    #[serde(default = "TaxPolicy::default_corporate_rate")]
+    pub corporate_rate: f64,
+    #[serde(default = "TaxPolicy::default_consumption_rate")]
+    pub consumption_rate: f64,
+    #[serde(default)]
+    pub deductions: f64,
+    #[serde(default = "TaxPolicy::default_gdp_sensitivity")]
+    pub gdp_sensitivity: f64,
+    #[serde(default = "TaxPolicy::default_employment_sensitivity")]
+    pub employment_sensitivity: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaxPolicy {
+    pub income_rate: f64,
+    pub corporate_rate: f64,
+    pub consumption_rate: f64,
+    pub deductions: f64,
+    pub gdp_sensitivity: f64,
+    pub employment_sensitivity: f64,
+    lagged_revenue: f64,
+}
+
+impl TaxPolicy {
+    const MIN_RATE: f64 = 0.0;
+    const MAX_RATE: f64 = 0.6;
+
+    pub fn default_income_rate() -> f64 {
+        0.18
+    }
+
+    pub fn default_corporate_rate() -> f64 {
+        0.22
+    }
+
+    pub fn default_consumption_rate() -> f64 {
+        0.08
+    }
+
+    pub fn default_gdp_sensitivity() -> f64 {
+        0.25
+    }
+
+    pub fn default_employment_sensitivity() -> f64 {
+        0.2
+    }
+
+    pub fn new(config: TaxPolicyConfig) -> Self {
+        Self {
+            income_rate: config.income_rate.clamp(Self::MIN_RATE, Self::MAX_RATE),
+            corporate_rate: config.corporate_rate.clamp(Self::MIN_RATE, Self::MAX_RATE),
+            consumption_rate: config
+                .consumption_rate
+                .clamp(Self::MIN_RATE, Self::MAX_RATE),
+            deductions: config.deductions.max(0.0),
+            gdp_sensitivity: config.gdp_sensitivity.clamp(-1.0, 1.0),
+            employment_sensitivity: config.employment_sensitivity.clamp(-1.0, 1.0),
+            lagged_revenue: 0.0,
+        }
+    }
+
+    pub fn default() -> Self {
+        Self::new(TaxPolicyConfig {
+            income_rate: Self::default_income_rate(),
+            corporate_rate: Self::default_corporate_rate(),
+            consumption_rate: Self::default_consumption_rate(),
+            deductions: 0.0,
+            gdp_sensitivity: Self::default_gdp_sensitivity(),
+            employment_sensitivity: Self::default_employment_sensitivity(),
+        })
+    }
+
+    pub fn collect(&mut self, gdp: f64, employment_ratio: f64, scale: f64) -> TaxOutcome {
+        let gdp_scaled = gdp.max(0.0);
+        let income_base = gdp_scaled * 0.45 * self.income_rate;
+        let corporate_base = gdp_scaled * 0.35 * self.corporate_rate;
+        let consumption_base = gdp_scaled * 0.20 * self.consumption_rate;
+        let gross = income_base + corporate_base + consumption_base;
+        let deduction = self.deductions.min(gross * 0.4);
+        let structural = (gross - deduction).max(0.0);
+
+        let gdp_factor = 1.0 + self.gdp_sensitivity * ((gdp_scaled / 1500.0) - 1.0);
+        let employment_factor = 1.0 + self.employment_sensitivity * (employment_ratio - 0.9);
+        let adjusted = (structural * gdp_factor * employment_factor).max(0.0) * scale;
+
+        let immediate = (adjusted * 0.7) + self.lagged_revenue;
+        let deferred = adjusted * 0.3;
+        self.lagged_revenue = deferred;
+
+        TaxOutcome {
+            immediate,
+            deferred,
+        }
+    }
+
+    pub fn pending_revenue(&self) -> f64 {
+        self.lagged_revenue
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountryDefinition {
     pub name: String,
@@ -175,6 +285,8 @@ pub struct CountryDefinition {
     pub approval: i32,
     pub budget: f64,
     pub resources: i32,
+    #[serde(default)]
+    pub tax_policy: Option<TaxPolicyConfig>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -243,6 +355,7 @@ pub struct CountryState {
     pub resources: i32,
     pub relations: HashMap<String, i32>,
     pub fiscal: FiscalAccount,
+    pub tax_policy: TaxPolicy,
     allocations: BudgetAllocation,
 }
 
@@ -265,6 +378,14 @@ impl CountryState {
 
     pub fn net_cash_flow(&self) -> f64 {
         self.fiscal.net_cash_flow()
+    }
+
+    pub fn tax_policy(&self) -> &TaxPolicy {
+        &self.tax_policy
+    }
+
+    fn tax_policy_mut(&mut self) -> &mut TaxPolicy {
+        &mut self.tax_policy
     }
 
     fn set_allocations(&mut self, allocations: BudgetAllocation) {
@@ -325,6 +446,10 @@ impl GameState {
                 } else {
                     CreditRating::BB
                 };
+                let tax_policy = definition
+                    .tax_policy
+                    .map(TaxPolicy::new)
+                    .unwrap_or_else(TaxPolicy::default);
                 CountryState {
                     name: definition.name,
                     government: definition.government,
@@ -336,6 +461,7 @@ impl GameState {
                     resources: clamp_resource(definition.resources),
                     relations: HashMap::new(),
                     fiscal: FiscalAccount::new(initial_cash, inferred_rating),
+                    tax_policy,
                     allocations: default_alloc,
                 }
             })
@@ -599,6 +725,17 @@ impl GameState {
         reports
     }
 
+    fn estimate_employment_ratio(&self, idx: usize) -> f64 {
+        self.countries
+            .get(idx)
+            .map(|country| {
+                let stability_factor = country.stability as f64 / MAX_METRIC as f64;
+                let approval_factor = country.approval as f64 / MAX_METRIC as f64;
+                ((stability_factor * 0.6) + (approval_factor * 0.4)).clamp(0.4, 1.2)
+            })
+            .unwrap_or(0.9)
+    }
+
     fn prepare_all_fiscal_flows(&mut self, scale: f64) {
         for country in &mut self.countries {
             country.fiscal.clear_flows();
@@ -608,18 +745,46 @@ impl GameState {
 
     fn apply_budget_effects(&mut self, idx: usize, scale: f64) -> Vec<String> {
         let mut reports = Vec::new();
-        let allocation = self.countries[idx].allocations();
-        let total_allocation = allocation.total();
-
-        let revenue = {
+        let employment_ratio = self.estimate_employment_ratio(idx);
+        let (gdp, resources) = {
             let country = &self.countries[idx];
-            (country.gdp * 0.015 * scale).max(5.0 * scale)
+            (country.gdp, country.resources)
         };
-        {
+        let TaxOutcome {
+            immediate,
+            deferred,
+        } = {
+            let country = &mut self.countries[idx];
+            country
+                .tax_policy_mut()
+                .collect(gdp, employment_ratio, scale)
+        };
+        if immediate > 0.0 {
             let country = &mut self.countries[idx];
             country
                 .fiscal
-                .record_revenue(RevenueKind::Taxation, revenue);
+                .record_revenue(RevenueKind::Taxation, immediate);
+            reports.push(format!(
+                "{} は税収を確保しました (即時 {:.1})",
+                country.name, immediate
+            ));
+        }
+        if deferred > 0.0 {
+            reports.push(format!(
+                "{} は将来計上予定の税収 {:.1} を繰越します。",
+                self.countries[idx].name, deferred
+            ));
+        }
+
+        let allocation = self.countries[idx].allocations();
+        let total_allocation = allocation.total();
+
+        let resource_revenue = (resources as f64 * 0.6 * scale).max(0.0);
+        if resource_revenue > 0.0 {
+            let country = &mut self.countries[idx];
+            country
+                .fiscal
+                .record_revenue(RevenueKind::ResourceExport, resource_revenue);
         }
 
         if total_allocation <= f64::EPSILON {
@@ -628,7 +793,7 @@ impl GameState {
 
         let spending_capacity = {
             let country = &self.countries[idx];
-            country.fiscal.cash_reserve() * 0.08 * scale
+            (country.fiscal.cash_reserve() * 0.08 * scale).min(country.fiscal.cash_reserve())
         };
 
         let infra_spend = spending_capacity * allocation.infrastructure;
@@ -1114,8 +1279,30 @@ mod tests {
     }
 
     #[test]
+    fn tax_policy_deferred_revenue_accrues() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 10).unwrap();
+        let initial_pending = game.countries()[0].tax_policy().pending_revenue();
+        assert!(initial_pending.abs() < f64::EPSILON);
+        game.tick_minutes(60.0).unwrap();
+        let (pending_after_first, cash_after_first) = {
+            let first_country = &game.countries()[0];
+            assert!(first_country.total_revenue() > 0.0);
+            (
+                first_country.tax_policy().pending_revenue(),
+                first_country.cash_reserve(),
+            )
+        };
+        assert!(pending_after_first > 0.0);
+        game.tick_minutes(60.0).unwrap();
+        let second_country = &game.countries()[0];
+        assert!(second_country.total_revenue() > 0.0);
+        assert!(second_country.cash_reserve() >= cash_after_first);
+        assert!(second_country.tax_policy().pending_revenue() >= 0.0);
+    }
+
+    #[test]
     fn next_event_minutes_reports_difference() {
-        let game = GameState::from_definitions_with_seed(sample_definitions(), 10).unwrap();
+        let game = GameState::from_definitions_with_seed(sample_definitions(), 11).unwrap();
         let next = game.next_event_minutes().unwrap();
         assert!(next > 0);
     }

@@ -176,6 +176,15 @@ fn print_country_details(game: &GameState, idx: usize) {
         country.total_expense(),
         country.net_cash_flow()
     );
+    let tax = country.tax_policy();
+    println!(
+        "税制: 所得 {:.1}% / 法人 {:.1}% / 消費 {:.1}% (控除 {:.1}, 次期繰越 {:.1})",
+        tax.income_rate * 100.0,
+        tax.corporate_rate * 100.0,
+        tax.consumption_rate * 100.0,
+        tax.deductions,
+        tax.pending_revenue()
+    );
     println!("資源指数: {}", country.resources);
     println!(
         "予算配分: インフラ {:.1}% / 軍事 {:.1}% / 福祉 {:.1}% / 外交 {:.1}%",
