@@ -3,7 +3,7 @@
 use realgeopolitics_core::CountryDefinition;
 
 #[cfg(target_arch = "wasm32")]
-use realgeopolitics_core::{BudgetAllocation, GameState, TimeStatus};
+use realgeopolitics_core::{BudgetAllocation, FiscalSnapshot, GameState, TimeStatus};
 use serde_json::Error as SerdeError;
 
 #[cfg(target_arch = "wasm32")]
@@ -177,16 +177,19 @@ fn app() -> Html {
         GameState::from_definitions(initial_definitions).expect("国データの初期化に失敗しました")
     });
 
-    let initial_forms = {
+    let (initial_forms, initial_snapshots) = {
         let game_ref = game.borrow();
-        game_ref
+        let forms = game_ref
             .countries()
             .iter()
             .map(|country| AllocationForm::from_allocation(country.allocations()))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        let snapshots = game_ref.fiscal_snapshots();
+        (forms, snapshots)
     };
 
     let allocation_forms = use_state(|| initial_forms);
+    let fiscal_snapshots = use_state(|| initial_snapshots);
     let selected_country = use_state(|| 0usize);
     let message = use_state(|| Option::<String>::None);
     let reports = use_state(Vec::<String>::new);
@@ -198,6 +201,7 @@ fn app() -> Html {
         let reports_handle = reports.clone();
         let message_handle = message.clone();
         let refresh = refresh.clone();
+        let snapshots_handle = fiscal_snapshots.clone();
         use_effect_with((), move |_| {
             let interval = Interval::new(1000, move || {
                 let mut game_mut = game.borrow_mut();
@@ -218,6 +222,8 @@ fn app() -> Html {
                             .map(|country| AllocationForm::from_allocation(country.allocations()))
                             .collect::<Vec<_>>();
                         forms_handle.set(snapshot);
+                        let fiscal_view = game_mut.fiscal_snapshots();
+                        snapshots_handle.set(fiscal_view);
                         refresh.set(refresh.wrapping_add(1));
                     }
                     Err(err) => {
@@ -359,6 +365,11 @@ fn app() -> Html {
         });
     let total_budget = current_allocation.total();
 
+    let snapshots_ref: &Vec<FiscalSnapshot> = &*fiscal_snapshots;
+    let current_snapshot = snapshots_ref
+        .get(current_idx)
+        .unwrap_or_else(|| panic!("財政スナップショットが存在しません (idx: {})", current_idx));
+
     let relations: Vec<(String, i32)> = countries
         .get(current_idx)
         .map(|country| {
@@ -484,6 +495,11 @@ fn app() -> Html {
                 </table>
             </section>
 
+            <section class="fiscal-report">
+                <h2>{ format!("財政レポート ({})", current_snapshot.name) }</h2>
+                { render_fiscal_chart(current_snapshot) }
+            </section>
+
             <section class="relations">
                 <h2>{ format!("{} の外交関係", countries.get(current_idx).map(|c| c.name.as_str()).unwrap_or("-")) }</h2>
                 <ul>
@@ -514,6 +530,138 @@ struct AllocationAmountChange {
 struct CoreMinimumChange {
     country_idx: usize,
     enabled: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_fiscal_chart(snapshot: &FiscalSnapshot) -> Html {
+    if snapshot.history.is_empty() {
+        panic!("財政履歴が取得できませんでした");
+    }
+    let width = 560.0;
+    let height = 220.0;
+    let left_margin = 48.0;
+    let right_margin = 16.0;
+    let top_margin = 16.0;
+    let bottom_margin = 28.0;
+    let plot_width = width - left_margin - right_margin;
+    let plot_height = height - top_margin - bottom_margin;
+    if plot_width <= 0.0 || plot_height <= 0.0 {
+        panic!("チャート領域が無効です");
+    }
+
+    let min_time = snapshot
+        .history
+        .first()
+        .map(|point| point.simulation_minutes)
+        .expect("履歴開始時間の取得に失敗しました");
+    let max_time = snapshot
+        .history
+        .last()
+        .map(|point| point.simulation_minutes)
+        .expect("履歴終了時間の取得に失敗しました");
+    let mut time_span = max_time - min_time;
+    if !time_span.is_finite() {
+        panic!("シミュレーション時間が不正です");
+    }
+    if time_span <= 0.0 {
+        time_span = 1.0;
+    }
+
+    let mut min_value = f64::MAX;
+    let mut max_value = f64::MIN;
+    for point in &snapshot.history {
+        for value in [point.revenue, point.expense, point.debt] {
+            if value < min_value {
+                min_value = value;
+            }
+            if value > max_value {
+                max_value = value;
+            }
+        }
+    }
+    if !min_value.is_finite() || !max_value.is_finite() {
+        panic!("財政履歴に非有限値が含まれています");
+    }
+    if min_value == f64::MAX {
+        panic!("財政履歴の集計に失敗しました");
+    }
+    if (max_value - min_value).abs() <= f64::EPSILON {
+        max_value = min_value + 1.0;
+    }
+    let value_span = max_value - min_value;
+    let scale_x = plot_width / time_span;
+    let scale_y = plot_height / value_span;
+
+    let map_x = |minutes: f64| -> f64 { left_margin + (minutes - min_time) * scale_x };
+    let map_y = |value: f64| -> f64 { top_margin + (plot_height - (value - min_value) * scale_y) };
+
+    let build_path = |value_fn: fn(&realgeopolitics_core::FiscalTrendPoint) -> f64| -> String {
+        let mut iter = snapshot.history.iter();
+        let first = iter.next().expect("履歴の先頭取得に失敗しました");
+        let mut path = format!(
+            "M {:.2} {:.2}",
+            map_x(first.simulation_minutes),
+            map_y(value_fn(first))
+        );
+        for point in iter {
+            let x = map_x(point.simulation_minutes);
+            let y = map_y(value_fn(point));
+            path.push_str(&format!(" L {:.2} {:.2}", x, y));
+        }
+        path
+    };
+
+    let revenue_path = build_path(|point| point.revenue);
+    let expense_path = build_path(|point| point.expense);
+    let debt_path = build_path(|point| point.debt);
+
+    let grid_line_count = 4;
+    let mut grid_lines = Vec::with_capacity(grid_line_count as usize);
+    for idx in 0..=grid_line_count {
+        let ratio = idx as f64 / grid_line_count as f64;
+        let value = min_value + ratio * value_span;
+        let y = map_y(value);
+        grid_lines.push((y, value));
+    }
+
+    let latest_point = snapshot
+        .history
+        .last()
+        .expect("履歴の末尾取得に失敗しました");
+
+    html! {
+        <div class="fiscal-chart">
+            <svg viewBox={format!("0 0 {:.0} {:.0}", width, height)} preserveAspectRatio="none">
+                <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", map_y(min_value))} x2={format!("{:.2}", left_margin + plot_width)} y2={format!("{:.2}", map_y(min_value))} stroke="#cccccc" stroke-width="1" />
+                <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", top_margin)} x2={format!("{:.2}", left_margin)} y2={format!("{:.2}", top_margin + plot_height)} stroke="#cccccc" stroke-width="1" />
+                { for grid_lines.iter().map(|(y, _)| {
+                    html! { <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", y)} x2={format!("{:.2}", left_margin + plot_width)} y2={format!("{:.2}", y)} stroke="#eeeeee" stroke-width="0.5" /> }
+                }) }
+                <path d={revenue_path} stroke="#2e86de" stroke-width="2" fill="none" />
+                <path d={expense_path} stroke="#c0392b" stroke-width="2" fill="none" stroke-dasharray="6 4" />
+                <path d={debt_path} stroke="#27ae60" stroke-width="2" fill="none" stroke-dasharray="2 3" />
+            </svg>
+            <div class="chart-legend">
+                <span class="legend-item revenue">{ format!("収入 {:.1}", snapshot.revenue) }</span>
+                <span class="legend-item expense">{ format!("支出 {:.1}", snapshot.expense) }</span>
+                <span class="legend-item debt">{ format!("債務 {:.1}", snapshot.debt) }</span>
+            </div>
+            <div class="chart-summary">
+                <span>{ format!("シミュレーション時間 {:.1} 分", latest_point.simulation_minutes) }</span>
+                <span>{ format!("現金準備 {:.1}", snapshot.cash_reserve) }</span>
+                <span>{ format!("純キャッシュフロー {:.1}", snapshot.net_cash_flow) }</span>
+            </div>
+            <div class="chart-scale" style={format!("position: relative; height: {:.0}px; width: {:.0}px;", height, left_margin)}>
+                { for grid_lines.iter().map(|(y, value)| {
+                    html! {
+                        <span class="scale-label" style={format!("position: absolute; top: {:.2}px; left: 0px;", y - 8.0)}>
+                            { format!("{:.0}", value) }
+                        </span>
+                    }
+                }) }
+            </div>
+        </div>
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

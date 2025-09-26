@@ -76,6 +76,27 @@ pub struct DebtCycleOutcome {
     pub crisis: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FiscalTrendPoint {
+    pub simulation_minutes: f64,
+    pub revenue: f64,
+    pub expense: f64,
+    pub debt: f64,
+    pub cash_reserve: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FiscalSnapshot {
+    pub name: String,
+    pub credit_rating: CreditRating,
+    pub cash_reserve: f64,
+    pub revenue: f64,
+    pub expense: f64,
+    pub net_cash_flow: f64,
+    pub debt: f64,
+    pub history: Vec<FiscalTrendPoint>,
+}
+
 pub(crate) fn downgrade_rating(rating: CreditRating) -> CreditRating {
     use CreditRating::*;
     match rating {

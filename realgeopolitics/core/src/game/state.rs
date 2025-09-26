@@ -7,7 +7,7 @@ use super::economy::{ExpenseKind, RevenueKind};
 use super::{
     BASE_TICK_MINUTES, MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES, MINUTES_PER_DAY,
     country::{BudgetAllocation, CountryDefinition, CountryState},
-    economy::{CreditRating, FiscalAccount, TaxPolicy},
+    economy::{CreditRating, FiscalAccount, FiscalSnapshot, TaxPolicy},
     market::CommodityMarket,
     systems::{diplomacy, events, fiscal, policy},
 };
@@ -102,7 +102,7 @@ impl GameState {
 
         let commodity_market = CommodityMarket::new(120.0, 7.5, 0.04);
 
-        Ok(Self {
+        let mut game = Self {
             clock: GameClock::new(),
             calendar: CalendarDate::from_start(),
             day_progress_minutes: 0,
@@ -112,7 +112,9 @@ impl GameState {
             countries,
             commodity_market,
             fiscal_prepared: false,
-        })
+        };
+        game.capture_fiscal_history();
+        Ok(game)
     }
 
     #[cfg(test)]
@@ -166,6 +168,20 @@ impl GameState {
 
     pub fn countries(&self) -> &[CountryState] {
         &self.countries
+    }
+
+    pub fn fiscal_snapshots(&self) -> Vec<FiscalSnapshot> {
+        self.countries
+            .iter()
+            .map(|country| country.fiscal_snapshot())
+            .collect()
+    }
+
+    pub fn fiscal_snapshot_of(&self, idx: usize) -> Result<FiscalSnapshot> {
+        self.countries
+            .get(idx)
+            .map(|country| country.fiscal_snapshot())
+            .ok_or_else(|| anyhow!("指定された国の番号が無効です: {}", idx + 1))
     }
 
     #[cfg(test)]
@@ -258,6 +274,7 @@ impl GameState {
             reports.extend(country_reports);
         }
 
+        self.capture_fiscal_history();
         self.fiscal_prepared = false;
         Ok(reports)
     }
@@ -291,6 +308,7 @@ impl GameState {
         if !already_prepared {
             self.fiscal_prepared = false;
         }
+        self.capture_fiscal_history();
         reports
     }
 
@@ -304,6 +322,13 @@ impl GameState {
 
     pub(crate) fn process_diplomatic_pulse(&mut self) -> Vec<String> {
         diplomacy::pulse(&mut self.countries)
+    }
+
+    fn capture_fiscal_history(&mut self) {
+        let minutes = self.simulation_minutes();
+        for country in self.countries.iter_mut() {
+            country.push_fiscal_history(minutes);
+        }
     }
 
     fn update_calendar(&mut self, advanced_minutes: u64) {
@@ -607,12 +632,24 @@ mod tests {
     fn fiscal_snapshot_updates_after_tick() {
         let mut game = GameState::from_definitions_with_seed(sample_definitions(), 9).unwrap();
         let before_cash = game.countries()[0].cash_reserve();
+        let initial_snapshot = game.fiscal_snapshot_of(0).unwrap();
+        assert_eq!(initial_snapshot.history.len(), 1);
+        assert!(initial_snapshot.history[0].simulation_minutes.abs() < f64::EPSILON);
+
         game.tick_minutes(60.0).unwrap();
-        let country = &game.countries()[0];
-        assert!(country.total_revenue() > 0.0);
-        assert!(country.total_expense() >= 0.0);
-        let net_change = country.cash_reserve() - before_cash;
-        assert!((net_change - country.net_cash_flow()).abs() < 1e-6);
+
+        let snapshot = game.fiscal_snapshot_of(0).unwrap();
+        assert!(snapshot.revenue > 0.0);
+        assert!(snapshot.expense >= 0.0);
+        assert!(snapshot.history.len() >= 2);
+        let latest = snapshot
+            .history
+            .last()
+            .expect("履歴の末尾取得に失敗しました");
+        assert!(latest.simulation_minutes >= 60.0);
+        assert!(latest.revenue >= snapshot.revenue);
+        let net_change = snapshot.cash_reserve - before_cash;
+        assert!((net_change - snapshot.net_cash_flow).abs() < 1e-6);
     }
 
     #[test]

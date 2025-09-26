@@ -53,7 +53,7 @@ Eversim 社の *Geo-Political Simulator* 系列を意識し、本プロジェク
 - [x] **資源・輸出入収益**: `CommodityMarket` を新設し、ランダムウォーク + ショックイベントで価格を更新。資源指数に応じた輸出収入を `RevenueKind::ResourceExport` へ計上し、CLI/GUI に単価を表示。
 - [x] **歳出分類**: 配分カテゴリを `infra`/`military`/`welfare`/`diplomacy` に債務返済・行政維持・研究開発を追加した 7 区分へ再編。GDP 比率 (%) 指定の `BudgetAllocation` と `ensure_core_minimum` フラグを導入し、CLI の `set` (7 数値 + `core|nocore`) と Web NumericUpDown で同一仕様の割合入力が可能になった。
 - [x] **債務 Dynamics**: `FiscalAccount` の `update_fiscal_cycle()` で利払い・償還・新規発行を処理。信用格付けに応じて利率変動し、一定閾値で債務危機イベントをトリガ。
-- **レポート API**: 国ごとの財政サマリ (`FiscalSnapshot`) を返す関数を用意。UI は折れ線チャートで収支・債務推移を表示。
+- [x] **レポート API**: 国ごとの財政サマリ (`FiscalSnapshot`) を公開し、GUI から財政履歴を取得可能にした。Web UI では折れ線チャートで収入・支出・債務の推移を描画し、最新数値と現金残高を同時にハイライト表示する。
 
 #### 3. イベントテンプレートと UI ダッシュボードへの連携 (抜粋)
 - **イベント定義**: `events/` ディレクトリに YAML/JSON のテンプレートを配置し、スケジューラが読み込み。条件式 (例: `stability < 40 && debt_ratio > 90%`) を評価し、該当時にタスクを登録。

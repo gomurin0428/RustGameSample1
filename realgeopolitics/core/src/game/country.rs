@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::economy::{FiscalAccount, TaxPolicy, TaxPolicyConfig};
+use super::economy::{FiscalAccount, FiscalSnapshot, FiscalTrendPoint, TaxPolicy, TaxPolicyConfig};
+
+const MAX_FISCAL_HISTORY: usize = 256;
+const HISTORY_DUPLICATE_EPS: f64 = 1e-6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountryDefinition {
@@ -134,6 +137,7 @@ pub struct CountryState {
     pub relations: HashMap<String, i32>,
     pub fiscal: FiscalAccount,
     pub tax_policy: TaxPolicy,
+    fiscal_history: Vec<FiscalTrendPoint>,
     allocations: BudgetAllocation,
 }
 impl CountryState {
@@ -162,6 +166,7 @@ impl CountryState {
             relations: HashMap::new(),
             fiscal,
             tax_policy,
+            fiscal_history: Vec::new(),
             allocations,
         }
     }
@@ -186,12 +191,48 @@ impl CountryState {
         self.fiscal.net_cash_flow()
     }
 
+    pub fn fiscal_snapshot(&self) -> FiscalSnapshot {
+        FiscalSnapshot {
+            name: self.name.clone(),
+            credit_rating: self.fiscal.credit_rating,
+            cash_reserve: self.fiscal.cash_reserve(),
+            revenue: self.fiscal.total_revenue(),
+            expense: self.fiscal.total_expense(),
+            net_cash_flow: self.fiscal.net_cash_flow(),
+            debt: self.fiscal.debt,
+            history: self.fiscal_history.clone(),
+        }
+    }
+
     pub fn tax_policy(&self) -> &TaxPolicy {
         &self.tax_policy
     }
 
     pub(crate) fn set_allocations(&mut self, allocations: BudgetAllocation) {
         self.allocations = allocations;
+    }
+
+    pub(crate) fn push_fiscal_history(&mut self, minutes: f64) {
+        if !minutes.is_finite() || minutes < 0.0 {
+            panic!("財政履歴の更新に不正な時間が指定されました");
+        }
+        let point = FiscalTrendPoint {
+            simulation_minutes: minutes,
+            revenue: self.fiscal.total_revenue(),
+            expense: self.fiscal.total_expense(),
+            debt: self.fiscal.debt,
+            cash_reserve: self.fiscal.cash_reserve(),
+        };
+        if let Some(last) = self.fiscal_history.last_mut() {
+            if (last.simulation_minutes - minutes).abs() < HISTORY_DUPLICATE_EPS {
+                *last = point;
+                return;
+            }
+        }
+        self.fiscal_history.push(point);
+        if self.fiscal_history.len() > MAX_FISCAL_HISTORY {
+            self.fiscal_history.remove(0);
+        }
     }
 
     pub(crate) fn tax_policy_mut(&mut self) -> &mut TaxPolicy {
