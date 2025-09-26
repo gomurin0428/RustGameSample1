@@ -9,3 +9,4 @@
 - 2025-09-26 10:35:54 realgeopolitics をリアルタイム制に刷新。`realgeopolitics-core` に予算配分ベースの tick ループを追加し、CLI の `set`/`tick` コマンドと Web GUI のスライダー＋自動更新ループで即時反映するよう変更。`cargo test --workspace --exclude realgeopolitics-web` と `cargo build -p realgeopolitics-web --target wasm32-unknown-unknown` を再実行し成功を確認。
 - 2025-09-26 10:43:22 GeoPolitical Simulator 化に向けた改修計画 `realgeopolitics/GEO_SIM_ROADMAP.md` を作成し、基盤強化・外交軍事・経済内政・UX までのフェーズ別ロードマップを整理。
 - 2025-09-26 10:50:41 フェーズ1対応として `GameClock`・`CalendarDate`・`Scheduler` を実装し、`GameState` を多層カレンダーとタスクスケジューラ対応に改修。テスト (`cargo test --workspace --exclude realgeopolitics-web`) と wasm ビルド (`cargo build -p realgeopolitics-web --target wasm32-unknown-unknown`) を再度実行して成功を確認。
+- 2025-09-26 11:04:35 スケジューラ実装に対応するユニットテストを追加し、`ScheduledTask::execute` の各タスク種別と `Scheduler` の動作を検証。再度 `cargo test --workspace --exclude realgeopolitics-web` と `cargo build -p realgeopolitics-web --target wasm32-unknown-unknown` を実行して成功を確認。

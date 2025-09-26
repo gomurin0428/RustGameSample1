@@ -201,6 +201,11 @@ impl GameState {
         &self.countries
     }
 
+    #[cfg(test)]
+    pub fn countries_mut(&mut self) -> &mut [CountryState] {
+        &mut self.countries
+    }
+
     pub fn find_country_index(&self, name_or_index: &str) -> Option<usize> {
         if let Ok(id) = name_or_index.parse::<usize>() {
             if id > 0 && id <= self.countries.len() {
@@ -683,5 +688,88 @@ mod tests {
             .copied()
             .unwrap();
         assert!(after > before);
+    }
+
+    #[test]
+    fn scheduler_returns_ready_tasks_by_time() {
+        let mut scheduler = Scheduler::new();
+        scheduler.schedule(ScheduledTask::new(TaskKind::EconomicTick, 5));
+        scheduler.schedule(ScheduledTask::new(TaskKind::EventTrigger, 120));
+
+        let clock = GameClock::new();
+        let ready_now = scheduler.next_ready_tasks(&clock);
+        assert_eq!(ready_now.len(), 1);
+        assert_eq!(ready_now[0].kind, TaskKind::EconomicTick);
+
+        let mut later_clock = GameClock::new();
+        later_clock.advance_minutes(180.0);
+        let ready_later = scheduler.next_ready_tasks(&later_clock);
+        assert_eq!(ready_later.len(), 1);
+        assert_eq!(ready_later[0].kind, TaskKind::EventTrigger);
+    }
+
+    #[test]
+    fn scheduled_task_economic_tick_applies_budget_effects() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 3).unwrap();
+        let alloc = BudgetAllocation::from_percentages(50.0, 20.0, 20.0, 5.0).unwrap();
+        game.update_allocations(0, alloc).unwrap();
+        let task = ScheduledTask::new(TaskKind::EconomicTick, 0);
+        let reports = task.execute(&mut game, 1.0);
+        assert!(reports.iter().any(|r| r.contains("インフラ投資")));
+    }
+
+    #[test]
+    fn scheduled_task_event_trigger_penalises_low_stability() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 4).unwrap();
+        {
+            let countries = game.countries_mut();
+            countries[0].stability = 30;
+            countries[0].approval = 50;
+        }
+        let task = ScheduledTask::new(TaskKind::EventTrigger, 0);
+        let reports = task.execute(&mut game, 1.0);
+        assert!(reports.iter().any(|r| r.contains("国民支持が低下しました")));
+        assert!(game.countries()[0].approval < 50);
+    }
+
+    #[test]
+    fn scheduled_task_policy_resolution_updates_reserve_and_resources() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 5).unwrap();
+        {
+            let countries = game.countries_mut();
+            countries[0].resources = 20;
+        }
+        let alloc = BudgetAllocation::from_percentages(40.0, 20.0, 20.0, 5.0).unwrap();
+        game.update_allocations(0, alloc).unwrap();
+        let before_budget = game.countries()[0].budget;
+        let before_gdp = game.countries()[0].gdp;
+        let task = ScheduledTask::new(TaskKind::PolicyResolution, 0);
+        let reports = task.execute(&mut game, 1.0);
+        assert!(reports.iter().any(|r| r.contains("予備費")));
+        assert!(game.countries()[0].budget > before_budget);
+        assert!(game.countries()[0].gdp < before_gdp);
+    }
+
+    #[test]
+    fn scheduled_task_diplomatic_pulse_adjusts_relations() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 6).unwrap();
+        {
+            let countries = game.countries_mut();
+            if let Some(rel) = countries[0].relations.get_mut("Borealis") {
+                *rel = 90;
+            }
+            if let Some(rel) = countries[1].relations.get_mut("Asteria") {
+                *rel = 90;
+            }
+        }
+        let task = ScheduledTask::new(TaskKind::DiplomaticPulse, 0);
+        let reports = task.execute(&mut game, 1.0);
+        assert!(reports.iter().any(|r| r.contains("関係値")));
+        let relation = game.countries()[0]
+            .relations
+            .get("Borealis")
+            .copied()
+            .unwrap();
+        assert!(relation < 90);
     }
 }
