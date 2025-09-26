@@ -1,7 +1,6 @@
 use rand::rngs::StdRng;
 
 use crate::game::CountryState;
-use crate::game::economy::{ExpenseKind, IndustryTickOutcome, RevenueKind};
 use crate::game::market::CommodityMarket;
 
 use super::{diplomacy, events, fiscal, policy};
@@ -89,36 +88,6 @@ impl SystemsFacade {
         }
         reports
     }
-
-    pub fn apply_industry_outcome(
-        &mut self,
-        outcome: &IndustryTickOutcome,
-        countries: &mut [CountryState],
-    ) {
-        let count = countries.len();
-        if count == 0 {
-            return;
-        }
-        let per_country = count as f64;
-        let revenue_share = outcome.total_revenue / per_country;
-        let cost_share = outcome.total_cost / per_country;
-        let gdp_share = outcome.total_gdp / per_country;
-        for country in countries.iter_mut() {
-            if revenue_share > 0.0 {
-                country
-                    .fiscal_mut()
-                    .record_revenue(RevenueKind::Trade, revenue_share);
-            }
-            if cost_share > 0.0 {
-                country
-                    .fiscal_mut()
-                    .record_expense(ExpenseKind::IndustrySupport, cost_share);
-            }
-            if gdp_share.abs() > f64::EPSILON {
-                country.gdp = (country.gdp + gdp_share).max(0.0);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -180,38 +149,5 @@ mod tests {
         assert!(facade.ensure_fiscal_prepared(&mut countries, 1.0));
         let _ = facade.process_economic_tick(&mut countries, &market, &mut rng, 1.0);
         assert!(!facade.ensure_fiscal_prepared(&mut countries, 1.0));
-    }
-
-    #[test]
-    fn apply_industry_outcome_distributes_values() {
-        let mut facade = SystemsFacade::new();
-        let mut countries = vec![sample_country("Asteria"), sample_country("Borealis")];
-        let mut outcome = IndustryTickOutcome::default();
-        outcome.total_revenue = 200.0;
-        outcome.total_cost = 60.0;
-        outcome.total_gdp = 40.0;
-
-        let base = countries
-            .iter()
-            .map(|country| {
-                (
-                    country.total_revenue(),
-                    country.total_expense(),
-                    country.gdp,
-                )
-            })
-            .collect::<Vec<_>>();
-
-        facade.apply_industry_outcome(&outcome, &mut countries);
-
-        let share_revenue = outcome.total_revenue / countries.len() as f64;
-        let share_cost = outcome.total_cost / countries.len() as f64;
-        let share_gdp = outcome.total_gdp / countries.len() as f64;
-
-        for (idx, country) in countries.iter().enumerate() {
-            assert!(country.total_revenue() >= base[idx].0 + share_revenue * 0.99);
-            assert!(country.total_expense() >= base[idx].1 + share_cost * 0.99);
-            assert!((country.gdp - (base[idx].2 + share_gdp)).abs() < 1e-6);
-        }
     }
 }

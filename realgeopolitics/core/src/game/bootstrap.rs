@@ -6,6 +6,7 @@ use super::{
     country::{BudgetAllocation, CountryDefinition, CountryState},
     economy::{CreditRating, FiscalAccount, IndustryCatalog, IndustryRuntime, TaxPolicy},
     event_templates::{ScriptedEventState, load_event_templates},
+    industry::IndustryEngine,
     market::CommodityMarket,
     state::GameState,
     systems::diplomacy,
@@ -49,6 +50,7 @@ impl GameBuilder {
         let commodity_market = CommodityMarket::new(120.0, 7.5, 0.04);
         let industry_catalog = IndustryCatalog::from_embedded().unwrap_or_default();
         let industry_runtime = IndustryRuntime::from_catalog(industry_catalog);
+        let industry_engine = IndustryEngine::new(industry_runtime);
 
         Ok(GameBootstrap {
             rng,
@@ -56,7 +58,7 @@ impl GameBuilder {
             countries,
             commodity_market,
             event_templates,
-            industry_runtime,
+            industry_engine,
         })
     }
 
@@ -75,7 +77,7 @@ pub(crate) struct GameBootstrap {
     pub(crate) countries: Vec<CountryState>,
     pub(crate) commodity_market: CommodityMarket,
     pub(crate) event_templates: Vec<ScriptedEventState>,
-    pub(crate) industry_runtime: IndustryRuntime,
+    pub(crate) industry_engine: IndustryEngine,
 }
 
 fn initialise_countries(definitions: Vec<CountryDefinition>) -> Vec<CountryState> {
@@ -211,13 +213,13 @@ mod tests {
             countries,
             event_templates,
             commodity_market,
-            industry_runtime,
+            industry_engine,
             ..
         } = bootstrap;
 
         assert_eq!(countries.len(), 2);
         assert!(!event_templates.is_empty());
-        assert!(industry_runtime.overview().len() > 0);
+        assert!(industry_engine.overview().len() > 0);
         assert!(commodity_market.price() > 0.0);
         assert!(scheduler.peek_next_minutes(0).is_some());
 

@@ -4,6 +4,7 @@ pub(crate) use constants::*;
 mod country;
 mod economy;
 mod event_templates;
+mod industry;
 mod market;
 mod state;
 pub(crate) mod systems;
