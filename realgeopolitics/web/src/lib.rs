@@ -3,7 +3,9 @@
 use realgeopolitics_core::CountryDefinition;
 
 #[cfg(target_arch = "wasm32")]
-use realgeopolitics_core::{BudgetAllocation, FiscalSnapshot, GameState, TimeStatus};
+use realgeopolitics_core::{
+    BudgetAllocation, FiscalSnapshot, FiscalTrendPoint, GameState, TimeStatus,
+};
 use serde_json::Error as SerdeError;
 
 #[cfg(target_arch = "wasm32")]
@@ -365,10 +367,25 @@ fn app() -> Html {
         });
     let total_budget = current_allocation.total();
 
+    let current_country = countries.get(current_idx);
+
     let snapshots_ref: &Vec<FiscalSnapshot> = &*fiscal_snapshots;
     let current_snapshot = snapshots_ref
         .get(current_idx)
         .unwrap_or_else(|| panic!("財政スナップショットが存在しません (idx: {})", current_idx));
+
+    let gdp_value = current_country.map(|country| country.gdp).unwrap_or(0.0);
+    let cash_value = current_snapshot.cash_reserve;
+    let debt_value = current_snapshot.debt;
+    let debt_ratio_value = current_snapshot.debt_ratio;
+    let approval_value = current_country
+        .map(|country| country.approval as f64)
+        .unwrap_or(0.0);
+    let dashboard_trend: Vec<FiscalTrendPoint> = {
+        let history = &current_snapshot.history;
+        let slice_start = history.len().saturating_sub(12);
+        history[slice_start..].to_vec()
+    };
 
     let relations: Vec<(String, i32)> = countries
         .get(current_idx)
@@ -495,6 +512,15 @@ fn app() -> Html {
                 </table>
             </section>
 
+            { render_dashboard(
+                gdp_value,
+                cash_value,
+                debt_value,
+                approval_value,
+                debt_ratio_value,
+                &dashboard_trend,
+            ) }
+
             <section class="fiscal-report">
                 <h2>{ format!("財政レポート ({})", current_snapshot.name) }</h2>
                 { render_fiscal_chart(current_snapshot) }
@@ -537,6 +563,12 @@ fn render_fiscal_chart(snapshot: &FiscalSnapshot) -> Html {
     if snapshot.history.is_empty() {
         panic!("財政履歴が取得できませんでした");
     }
+    let max_points = 12;
+    let slice_start = snapshot.history.len().saturating_sub(max_points);
+    let history_window = &snapshot.history[slice_start..];
+    if history_window.is_empty() {
+        panic!("財政履歴のウィンドウ生成に失敗しました");
+    }
     let width = 560.0;
     let height = 220.0;
     let left_margin = 48.0;
@@ -549,13 +581,11 @@ fn render_fiscal_chart(snapshot: &FiscalSnapshot) -> Html {
         panic!("チャート領域が無効です");
     }
 
-    let min_time = snapshot
-        .history
+    let min_time = history_window
         .first()
         .map(|point| point.simulation_minutes)
         .expect("履歴開始時間の取得に失敗しました");
-    let max_time = snapshot
-        .history
+    let max_time = history_window
         .last()
         .map(|point| point.simulation_minutes)
         .expect("履歴終了時間の取得に失敗しました");
@@ -569,7 +599,7 @@ fn render_fiscal_chart(snapshot: &FiscalSnapshot) -> Html {
 
     let mut min_value = f64::MAX;
     let mut max_value = f64::MIN;
-    for point in &snapshot.history {
+    for point in history_window {
         for value in [point.revenue, point.expense, point.debt] {
             if value < min_value {
                 min_value = value;
@@ -596,7 +626,7 @@ fn render_fiscal_chart(snapshot: &FiscalSnapshot) -> Html {
     let map_y = |value: f64| -> f64 { top_margin + (plot_height - (value - min_value) * scale_y) };
 
     let build_path = |value_fn: fn(&realgeopolitics_core::FiscalTrendPoint) -> f64| -> String {
-        let mut iter = snapshot.history.iter();
+        let mut iter = history_window.iter();
         let first = iter.next().expect("履歴の先頭取得に失敗しました");
         let mut path = format!(
             "M {:.2} {:.2}",
@@ -624,10 +654,7 @@ fn render_fiscal_chart(snapshot: &FiscalSnapshot) -> Html {
         grid_lines.push((y, value));
     }
 
-    let latest_point = snapshot
-        .history
-        .last()
-        .expect("履歴の末尾取得に失敗しました");
+    let latest_point = history_window.last().expect("履歴の末尾取得に失敗しました");
 
     html! {
         <div class="fiscal-chart">
@@ -781,5 +808,172 @@ mod wasm_tests {
             other => panic!("予期しないノード種別: {:?}", other),
         }
         assert!(captured.borrow().is_none());
+    }
+}
+#[cfg(target_arch = "wasm32")]
+fn render_dashboard(
+    gdp: f64,
+    cash: f64,
+    debt: f64,
+    approval: f64,
+    debt_ratio: f64,
+    trend_points: &[FiscalTrendPoint],
+) -> Html {
+    if trend_points.is_empty() {
+        panic!("トレンドデータが不足しています");
+    }
+    let width = 360.0;
+    let height = 160.0;
+    let left_margin = 36.0;
+    let right_margin = 12.0;
+    let top_margin = 18.0;
+    let bottom_margin = 28.0;
+    let plot_width = width - left_margin - right_margin;
+    let plot_height = height - top_margin - bottom_margin;
+    if plot_width <= 0.0 || plot_height <= 0.0 {
+        panic!("トレンドグラフの描画領域が無効です");
+    }
+
+    let ratios: Vec<f64> = trend_points
+        .iter()
+        .map(|point| {
+            if point.debt_ratio.is_finite() {
+                point.debt_ratio.max(0.0)
+            } else {
+                200.0
+            }
+        })
+        .collect();
+    let mut min_ratio = ratios
+        .iter()
+        .copied()
+        .fold(f64::MAX, |acc, value| acc.min(value));
+    let mut max_ratio = ratios
+        .iter()
+        .copied()
+        .fold(f64::MIN, |acc, value| acc.max(value));
+    if ratios.len() == 1 {
+        min_ratio = min_ratio.min(ratios[0] - 1.0);
+        max_ratio = max_ratio.max(ratios[0] + 1.0);
+    }
+    if (max_ratio - min_ratio).abs() < 1.0 {
+        max_ratio = max_ratio + 1.0;
+        min_ratio = (min_ratio - 1.0).max(0.0);
+    }
+    let scale_x = if trend_points.len() > 1 {
+        plot_width / ((trend_points.len() - 1) as f64)
+    } else {
+        0.0
+    };
+    let scale_y = plot_height / (max_ratio - min_ratio);
+    let map_x = |index: usize| -> f64 {
+        if trend_points.len() <= 1 {
+            left_margin + plot_width / 2.0
+        } else {
+            left_margin + (index as f64) * scale_x
+        }
+    };
+    let map_y = |ratio: f64| -> f64 { top_margin + (plot_height - (ratio - min_ratio) * scale_y) };
+
+    let mut path = String::new();
+    for (idx, ratio) in ratios.iter().enumerate() {
+        let command = if idx == 0 { 'M' } else { 'L' };
+        path.push_str(&format!(
+            "{} {:.2} {:.2} ",
+            command,
+            map_x(idx),
+            map_y(*ratio)
+        ));
+    }
+
+    let reference_lines = 4;
+    let mut grid_lines = Vec::new();
+    for idx in 0..=reference_lines {
+        let ratio = min_ratio + (idx as f64 / reference_lines as f64) * (max_ratio - min_ratio);
+        let line_y = map_y(ratio);
+        grid_lines.push((line_y, ratio));
+    }
+
+    let balance = cash - debt;
+    let latest_ratio = *ratios.last().unwrap_or(&debt_ratio);
+
+    html! {
+        <section class="dashboard">
+            <h2>{ "ダッシュボード" }</h2>
+            <div class="metrics-cards">
+                <div class="metric-card">
+                    <span class="label">{ "GDP" }</span>
+                    <span class="value">{ format_compact_number(gdp) }</span>
+                </div>
+                <div class="metric-card">
+                    <span class="label">{ "バランスシート" }</span>
+                    <span class="value">{ format_balance(balance) }</span>
+                    <span class="sub">{ format!("現金 {:.1} / 債務 {:.1}", cash, debt) }</span>
+                </div>
+                <div class="metric-card">
+                    <span class="label">{ "債務比率" }</span>
+                    <span class="value">{ format_ratio(debt_ratio) }</span>
+                </div>
+                <div class="metric-card">
+                    <span class="label">{ "世論指数" }</span>
+                    <span class="value">{ format!("{:.0}", approval) }</span>
+                </div>
+            </div>
+            <div class="trend-chart">
+                <h3>{ "債務比率トレンド (直近12 Tick)" }</h3>
+                <svg viewBox={format!("0 0 {:.0} {:.0}", width, height)} preserveAspectRatio="none">
+                    <rect x="0" y="0" width={format!("{:.0}", width)} height={format!("{:.0}", height)} fill="none" stroke="#dddddd" stroke-width="0.5" />
+                    <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", top_margin)} x2={format!("{:.2}", left_margin)} y2={format!("{:.2}", top_margin + plot_height)} stroke="#cccccc" stroke-width="1" />
+                    <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", top_margin + plot_height)} x2={format!("{:.2}", left_margin + plot_width)} y2={format!("{:.2}", top_margin + plot_height)} stroke="#cccccc" stroke-width="1" />
+                    { for grid_lines.iter().map(|(line_y, value)| {
+                        html! {
+                            <g>
+                                <line x1={format!("{:.2}", left_margin)} y1={format!("{:.2}", line_y)} x2={format!("{:.2}", left_margin + plot_width)} y2={format!("{:.2}", line_y)} stroke="#eeeeee" stroke-width="0.5" />
+                                <text x={format!("{:.2}", 2.0)} y={format!("{:.2}", line_y + 4.0)} class="axis-label">{ format!("{:.0}%", value) }</text>
+                            </g>
+                        }
+                    }) }
+                    <path d={path} stroke="#8e44ad" stroke-width="2" fill="none" />
+                    { for ratios.iter().enumerate().map(|(idx, ratio)| {
+                        html! {
+                            <circle cx={format!("{:.2}", map_x(idx))} cy={format!("{:.2}", map_y(*ratio))} r="2.5" fill="#8e44ad" />
+                        }
+                    }) }
+                </svg>
+                <div class="trend-summary">
+                    <span>{ format!("最新債務比率: {}", format_ratio(latest_ratio)) }</span>
+                    <span>{ format!("データ点: {}", trend_points.len()) }</span>
+                </div>
+            </div>
+        </section>
+    }
+}
+#[cfg(target_arch = "wasm32")]
+fn format_compact_number(value: f64) -> String {
+    let abs = value.abs();
+    if abs >= 1_000_000.0 {
+        format!("{:.1}M", value / 1_000_000.0)
+    } else if abs >= 1_000.0 {
+        format!("{:.1}K", value / 1_000.0)
+    } else {
+        format!("{:.1}", value)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn format_balance(value: f64) -> String {
+    if value >= 0.0 {
+        format!("+{:.1}", value)
+    } else {
+        format!("{:.1}", value)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn format_ratio(value: f64) -> String {
+    if value.is_finite() {
+        format!("{:.1}%", value)
+    } else {
+        "∞%".to_string()
     }
 }

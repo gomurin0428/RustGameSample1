@@ -83,6 +83,9 @@ pub struct FiscalTrendPoint {
     pub expense: f64,
     pub debt: f64,
     pub cash_reserve: f64,
+    pub gdp: f64,
+    pub approval: f64,
+    pub debt_ratio: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +97,9 @@ pub struct FiscalSnapshot {
     pub expense: f64,
     pub net_cash_flow: f64,
     pub debt: f64,
+    pub gdp: f64,
+    pub approval: f64,
+    pub debt_ratio: f64,
     pub history: Vec<FiscalTrendPoint>,
 }
 

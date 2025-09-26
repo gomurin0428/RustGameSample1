@@ -200,6 +200,9 @@ impl CountryState {
             expense: self.fiscal.total_expense(),
             net_cash_flow: self.fiscal.net_cash_flow(),
             debt: self.fiscal.debt,
+            gdp: self.gdp.max(0.0),
+            approval: self.approval as f64,
+            debt_ratio: self.current_debt_ratio(),
             history: self.fiscal_history.clone(),
         }
     }
@@ -216,12 +219,16 @@ impl CountryState {
         if !minutes.is_finite() || minutes < 0.0 {
             panic!("財政履歴の更新に不正な時間が指定されました");
         }
+        let debt_ratio = self.current_debt_ratio();
         let point = FiscalTrendPoint {
             simulation_minutes: minutes,
             revenue: self.fiscal.total_revenue(),
             expense: self.fiscal.total_expense(),
-            debt: self.fiscal.debt,
+            debt: self.fiscal.debt.max(0.0),
             cash_reserve: self.fiscal.cash_reserve(),
+            gdp: self.gdp.max(0.0),
+            approval: self.approval as f64,
+            debt_ratio,
         };
         if let Some(last) = self.fiscal_history.last_mut() {
             if (last.simulation_minutes - minutes).abs() < HISTORY_DUPLICATE_EPS {
@@ -241,5 +248,17 @@ impl CountryState {
 
     pub(crate) fn fiscal_mut(&mut self) -> &mut FiscalAccount {
         &mut self.fiscal
+    }
+
+    fn current_debt_ratio(&self) -> f64 {
+        let debt = self.fiscal.debt.max(0.0);
+        let gdp = self.gdp.max(0.0);
+        if gdp > 0.0 {
+            (debt / gdp) * 100.0
+        } else if debt <= f64::EPSILON {
+            0.0
+        } else {
+            f64::INFINITY
+        }
     }
 }
