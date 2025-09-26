@@ -27,3 +27,4 @@
 - 2025-09-26 15:42:49 realgeopolitics のダッシュボード機能を実装。`FiscalSnapshot`/`FiscalTrendPoint` に GDP・債務比率などを追加し、Web UI でカード表示と直近 12 tick の債務比率チャートを描画。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` → `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` → `C:\Users\gomur\.cargo\bin\cargo.exe build -p realgeopolitics-web --target wasm32-unknown-unknown` を実行して正常動作を確認。
 - 2025-09-26 16:01:51 realgeopolitics Web UI のタブ構成を再設計。操作系・指標ダッシュボード・外交/イベントを三分割タブ化し、ダッシュボード内に債務比率と財政レポートの切替タブを追加。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` → `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` → `C:\Users\gomur\.cargo\bin\cargo.exe build -p realgeopolitics-web --target wasm32-unknown-unknown` を実行し表示崩れが無いことを確認。
 - 2025-09-26 16:21:42 一次〜三次産業およびエネルギーセクター拡張の仕様と導入計画を GEO_SIM_ROADMAP.md に追加し、データ構造・依存関係・政策 UI までの段階的実装ステップを整理。
+- 2025-09-26 16:31:55 `core::game::economy::industry` モジュールと `config/industries/*.yaml` を新設。セクター/依存関係/カタログ読み込みのデータ構造を定義し、`cargo fmt` → `cargo test --workspace` を実行して正常終了を確認。

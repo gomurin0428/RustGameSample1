@@ -1,0 +1,34 @@
+category: primary
+sectors:
+  - key: grains
+    name: 穀物
+    description: 基幹穀物の生産。食料安全保障に直結する。
+    base_output: 140.0
+    base_cost: 48.0
+    price_sensitivity: 0.55
+    employment: 220.0
+    dependencies: []
+  - key: horticulture
+    name: 園芸作物
+    description: 野菜・果物の集約的生産。
+    base_output: 110.0
+    base_cost: 52.0
+    price_sensitivity: 0.65
+    employment: 180.0
+    dependencies:
+      - sector: electricity
+        category: energy
+        requirement: 0.20
+        dependency: cost
+  - key: rare_metals
+    name: レアメタル採掘
+    description: ハイテク産業向け原材料。
+    base_output: 90.0
+    base_cost: 80.0
+    price_sensitivity: 0.4
+    employment: 95.0
+    dependencies:
+      - sector: diesel
+        category: energy
+        requirement: 0.35
+        dependency: cost

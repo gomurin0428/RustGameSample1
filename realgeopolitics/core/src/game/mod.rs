@@ -8,5 +8,9 @@ mod state;
 pub(crate) mod systems;
 
 pub use country::{BudgetAllocation, CountryDefinition, CountryState};
-pub use economy::{FiscalSnapshot, FiscalTrendPoint, TaxPolicy, TaxPolicyConfig};
+#[allow(unused_imports)]
+pub use economy::{
+    DependencyKind, FiscalSnapshot, FiscalTrendPoint, IndustryCatalog, IndustryCategory,
+    SectorDefinition, SectorDependency, SectorId, SectorState, TaxPolicy, TaxPolicyConfig,
+};
 pub use state::{GameState, TimeStatus};

@@ -1,0 +1,50 @@
+category: energy
+sectors:
+  - key: electricity
+    name: 電力
+    description: 発電・送電インフラ。ベースロードと再エネを含む。
+    base_output: 260.0
+    base_cost: 95.0
+    price_sensitivity: 0.40
+    employment: 140.0
+    dependencies:
+      - sector: crude_oil
+        category: energy
+        requirement: 0.10
+        dependency: input
+      - sector: natural_gas
+        category: energy
+        requirement: 0.25
+        dependency: input
+  - key: natural_gas
+    name: 天然ガス
+    description: 都市ガスと発電燃料。
+    base_output: 180.0
+    base_cost: 70.0
+    price_sensitivity: 0.45
+    employment: 120.0
+    dependencies: []
+  - key: crude_oil
+    name: 原油
+    description: 採掘と国内精製。
+    base_output: 200.0
+    base_cost: 110.0
+    price_sensitivity: 0.35
+    employment: 150.0
+    dependencies:
+      - sector: rare_metals
+        category: primary
+        requirement: 0.20
+        dependency: demand
+  - key: diesel
+    name: ディーゼル燃料
+    description: 輸送と農業向け燃料。
+    base_output: 150.0
+    base_cost: 85.0
+    price_sensitivity: 0.50
+    employment: 130.0
+    dependencies:
+      - sector: crude_oil
+        category: energy
+        requirement: 0.60
+        dependency: input

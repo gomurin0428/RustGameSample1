@@ -1,0 +1,54 @@
+category: secondary
+sectors:
+  - key: steel
+    name: 鉄鋼
+    description: 建設・自動車産業向け基礎素材。
+    base_output: 180.0
+    base_cost: 105.0
+    price_sensitivity: 0.45
+    employment: 160.0
+    dependencies:
+      - sector: rare_metals
+        category: primary
+        requirement: 0.50
+        dependency: input
+      - sector: electricity
+        category: energy
+        requirement: 0.40
+        dependency: cost
+  - key: automotive
+    name: 自動車
+    description: 完成車組立と部品製造。
+    base_output: 220.0
+    base_cost: 160.0
+    price_sensitivity: 0.35
+    employment: 210.0
+    dependencies:
+      - sector: steel
+        category: secondary
+        requirement: 0.55
+        dependency: input
+      - sector: petrochemicals
+        category: secondary
+        requirement: 0.25
+        dependency: input
+      - sector: electricity
+        category: energy
+        requirement: 0.30
+        dependency: cost
+  - key: petrochemicals
+    name: 石油化学
+    description: プラスチック・化学材料を供給。
+    base_output: 150.0
+    base_cost: 120.0
+    price_sensitivity: 0.42
+    employment: 130.0
+    dependencies:
+      - sector: crude_oil
+        category: energy
+        requirement: 0.50
+        dependency: input
+      - sector: grains
+        category: primary
+        requirement: 0.10
+        dependency: demand

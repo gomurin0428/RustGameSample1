@@ -1,3 +1,9 @@
+pub mod industry;
+pub use industry::{
+    DependencyKind, IndustryCatalog, IndustryCategory, SectorDefinition, SectorDependency,
+    SectorId, SectorState,
+};
+
 use serde::{Deserialize, Serialize};
 
 const HOURS_PER_YEAR: f64 = 24.0 * 365.0;

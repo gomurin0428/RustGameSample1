@@ -1,0 +1,42 @@
+category: tertiary
+sectors:
+  - key: logistics
+    name: 物流
+    description: 国内外の輸送・倉庫サービス。
+    base_output: 160.0
+    base_cost: 90.0
+    price_sensitivity: 0.5
+    employment: 240.0
+    dependencies:
+      - sector: diesel
+        category: energy
+        requirement: 0.30
+        dependency: cost
+      - sector: steel
+        category: secondary
+        requirement: 0.10
+        dependency: demand
+  - key: finance
+    name: 金融
+    description: 銀行・保険・投資サービス。
+    base_output: 210.0
+    base_cost: 70.0
+    price_sensitivity: 0.30
+    employment: 150.0
+    dependencies:
+      - sector: ict_services
+        category: tertiary
+        requirement: 0.20
+        dependency: cost
+  - key: tourism
+    name: 観光
+    description: インバウンド・国内旅行産業。
+    base_output: 130.0
+    base_cost: 85.0
+    price_sensitivity: 0.75
+    employment: 200.0
+    dependencies:
+      - sector: horticulture
+        category: primary
+        requirement: 0.15
+        dependency: demand
