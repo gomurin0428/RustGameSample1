@@ -1,10 +1,9 @@
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Result, anyhow};
 #[cfg(test)]
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 use super::{
-    BASE_TICK_MINUTES, MINUTES_PER_DAY,
     bootstrap::{GameBootstrap, GameBuilder},
     country::{BudgetAllocation, CountryDefinition, CountryState},
     economy::{
@@ -14,16 +13,13 @@ use super::{
     event_templates::ScriptedEventState,
     market::CommodityMarket,
     systems::{diplomacy, events, fiscal, policy},
+    time::SimulationClock,
 };
-use crate::{CalendarDate, GameClock, ScheduledTask, Scheduler};
+use crate::{CalendarDate, ScheduledTask};
 
 pub struct GameState {
-    clock: GameClock,
-    calendar: CalendarDate,
-    day_progress_minutes: u32,
-    time_multiplier: f64,
+    simulation_clock: SimulationClock,
     rng: StdRng,
-    scheduler: Scheduler,
     countries: Vec<CountryState>,
     commodity_market: CommodityMarket,
     event_templates: Vec<ScriptedEventState>,
@@ -63,12 +59,8 @@ impl GameState {
 
     pub(crate) fn new(bootstrap: GameBootstrap) -> Self {
         let mut game = Self {
-            clock: GameClock::new(),
-            calendar: CalendarDate::from_start(),
-            day_progress_minutes: 0,
-            time_multiplier: 1.0,
+            simulation_clock: SimulationClock::new(bootstrap.scheduler),
             rng: bootstrap.rng,
-            scheduler: bootstrap.scheduler,
             countries: bootstrap.countries,
             commodity_market: bootstrap.commodity_market,
             event_templates: bootstrap.event_templates,
@@ -80,11 +72,11 @@ impl GameState {
     }
 
     pub fn simulation_minutes(&self) -> f64 {
-        self.clock.total_minutes_f64()
+        self.simulation_clock.simulation_minutes()
     }
 
     pub fn calendar_date(&self) -> CalendarDate {
-        self.calendar
+        self.simulation_clock.calendar_date()
     }
 
     pub fn commodity_price(&self) -> f64 {
@@ -92,7 +84,7 @@ impl GameState {
     }
 
     pub fn time_multiplier(&self) -> f64 {
-        self.time_multiplier
+        self.simulation_clock.time_multiplier()
     }
 
     pub fn industry_overview(&self) -> Vec<SectorOverview> {
@@ -105,27 +97,19 @@ impl GameState {
     }
 
     pub fn set_time_multiplier(&mut self, multiplier: f64) -> Result<()> {
-        ensure!(
-            multiplier.is_finite() && multiplier > 0.0,
-            "時間倍率は正の有限値で指定してください"
-        );
-        self.time_multiplier = multiplier.clamp(0.1, 5.0);
-        Ok(())
+        self.simulation_clock.set_time_multiplier(multiplier)
     }
 
     pub fn next_event_minutes(&self) -> Option<u64> {
-        let current = self.clock.total_minutes();
-        self.scheduler
-            .peek_next_minutes(current)
-            .map(|next| next.saturating_sub(current))
+        self.simulation_clock.next_event_in_minutes()
     }
 
     pub fn time_status(&self) -> TimeStatus {
         TimeStatus {
-            simulation_minutes: self.simulation_minutes(),
-            calendar: self.calendar,
-            next_event_in_minutes: self.next_event_minutes(),
-            time_multiplier: self.time_multiplier,
+            simulation_minutes: self.simulation_clock.simulation_minutes(),
+            calendar: self.simulation_clock.calendar_date(),
+            next_event_in_minutes: self.simulation_clock.next_event_in_minutes(),
+            time_multiplier: self.simulation_clock.time_multiplier(),
         }
     }
 
@@ -197,15 +181,9 @@ impl GameState {
     }
 
     pub fn tick_minutes(&mut self, minutes: f64) -> Result<Vec<String>> {
-        ensure!(minutes.is_finite(), "時間が不正です");
-        ensure!(minutes > 0.0, "時間は正の値で指定してください");
-
-        let effective_minutes = minutes * self.time_multiplier;
-
-        let advanced_minutes = self.clock.advance_minutes(effective_minutes);
-        self.update_calendar(advanced_minutes);
-
-        let scale = effective_minutes / BASE_TICK_MINUTES;
+        let tick = self.simulation_clock.advance(minutes)?;
+        let effective_minutes = tick.effective_minutes;
+        let scale = tick.scale;
         let mut reports = Vec::new();
 
         if !self.fiscal_prepared {
@@ -217,14 +195,13 @@ impl GameState {
             reports.push(market_report);
         }
 
-        let ready_tasks = self.scheduler.next_ready_tasks(&self.clock);
-        if ready_tasks.is_empty() {
+        if tick.ready_tasks.is_empty() {
             reports.push(format!(
                 "{:.1} 分経過しましたが、スケジュールされた処理はありません。",
                 effective_minutes
             ));
         } else {
-            for task in ready_tasks {
+            for task in tick.ready_tasks {
                 let mut task_reports = task.execute(self, scale);
                 if !task_reports.is_empty() {
                     reports.append(&mut task_reports);
@@ -341,7 +318,7 @@ impl GameState {
     }
 
     pub(crate) fn process_scripted_event(&mut self, template_idx: usize) -> Vec<String> {
-        let minutes = self.clock.total_minutes_f64();
+        let minutes = self.simulation_clock.simulation_minutes();
         let template = self
             .event_templates
             .get_mut(template_idx)
@@ -355,19 +332,6 @@ impl GameState {
             country.push_fiscal_history(minutes);
         }
     }
-
-    fn update_calendar(&mut self, advanced_minutes: u64) {
-        let mut total_days = advanced_minutes / MINUTES_PER_DAY;
-        let remainder = advanced_minutes % MINUTES_PER_DAY;
-        self.day_progress_minutes += remainder as u32;
-        if self.day_progress_minutes as u64 >= MINUTES_PER_DAY {
-            total_days += (self.day_progress_minutes as u64) / MINUTES_PER_DAY;
-            self.day_progress_minutes %= MINUTES_PER_DAY as u32;
-        }
-        if total_days > 0 {
-            self.calendar.advance_days(total_days);
-        }
-    }
 }
 
 impl ScheduledTask {
@@ -379,11 +343,11 @@ impl ScheduledTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TaskKind;
     use crate::game::economy::industry::{IndustryCatalog, IndustryRuntime};
     use crate::game::economy::{CreditRating, FiscalAccount};
     use crate::game::{IndustryCategory, SectorId};
     use crate::scheduler::{ONE_YEAR_MINUTES, ScheduleSpec};
+    use crate::{GameClock, Scheduler, TaskKind};
 
     fn sample_definitions() -> Vec<CountryDefinition> {
         serde_json::from_str::<Vec<CountryDefinition>>(

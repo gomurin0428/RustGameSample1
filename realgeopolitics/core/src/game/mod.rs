@@ -7,6 +7,7 @@ mod event_templates;
 mod market;
 mod state;
 pub(crate) mod systems;
+mod time;
 
 #[allow(unused_imports)]
 pub use bootstrap::GameBuilder;

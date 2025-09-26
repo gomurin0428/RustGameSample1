@@ -15,6 +15,7 @@
 - crate ルートから再エクスポートされる型は `GameState` / `CountryState` / `CountryDefinition` / `BudgetAllocation` / `TaxPolicy` / `TaxPolicyConfig` / `TimeStatus` に絞られました。以前 `CreditRating` や `CommodityMarket` を直接インポートしていたコードは `game` モジュール内の実装詳細として扱われるため、必要なら `GameState` 経由のメソッドを利用してください。
 - 低レベルのロジックは `game::systems::{fiscal, policy, diplomacy, events, tasks}` に分割されています。予算ロジックや外交ロジックを拡張する際は `GameState` に直接ロジックを追加せず、該当サブシステム内の関数を修正してください。
 - `GameState` の初期化手順は `game::bootstrap::GameBuilder` に集約されています。国定義のバリデーションやスケジューラ登録、イベントテンプレート読込を `GameState` 側に追加すると依存分離が崩れるので、初期化変更は `bootstrap.rs` 内の `initialise_countries` / `register_core_tasks` / `register_scripted_events` を経由してください。`GameState::new` に未初期化の依存を渡すと panic するため、テストでも必ず `GameBuilder` を通して生成してください。
+- 時間進行とスケジューラ制御は `game::time::SimulationClock` に集約されました。時間倍率やカレンダー、`Scheduler` へのアクセスを個別に更新すると tick 順序とカレンダー進行がずれるため、時間関連のロジックを追加するときは `SimulationClock::advance` / `SimulationClock::set_time_multiplier` を経由してください。直接 `Scheduler::next_ready_tasks` を呼びたくなるケースでも、`SimulationClock` を通すことでカレンダー日数が確実に同期されます。
 - CLI 版で `set` コマンドを使う場合は、インフラ/軍事/福祉/外交/債務返済/行政維持/研究開発の順で GDP 比率 (％) を 7 つ入力し、必要に応じて末尾に `core` または `nocore` を付けてください。合計値に上限制約はありませんが、旧仕様（割合正規化）向けのスクリプトを使い続けると引数不足で失敗するため移行時は確認してください。Web 版も NumericUpDown で同じ割合を扱い、自動正規化は行われません。
 - Web 版の時間倍率セレクタは内部的に小数点第2位で丸めた値を表示します。CLI 側で 1.333 など細かい倍率を設定した直後は「カスタム」項目が追加されて 1.33 として選択されるので、厳密な値を維持したい場合は CLI から再調整してください。
 - FiscalAccount の収支は tick ごとにクリアされます。テストや CLI で直前 tick の収支を確認したい場合は `tick` 実行直後に `total_revenue()` / `total_expense()` を参照してください。複数 tick の履歴が必要なら別途蓄積してください。
