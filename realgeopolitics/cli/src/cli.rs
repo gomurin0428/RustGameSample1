@@ -150,7 +150,7 @@ fn print_overview(game: &GameState) {
             country.stability,
             country.military,
             country.approval,
-            country.budget,
+            country.cash_reserve(),
             alloc.infrastructure * 100.0,
             alloc.military * 100.0,
             alloc.welfare * 100.0,
@@ -169,7 +169,13 @@ fn print_country_details(game: &GameState, idx: usize) {
     println!("安定度: {}", country.stability);
     println!("軍事力: {}", country.military);
     println!("国民支持率: {}", country.approval);
-    println!("予算残高: {:.1}", country.budget);
+    println!("予算残高: {:.1}", country.cash_reserve());
+    println!(
+        "今期収支: 収入 {:.1} / 支出 {:.1} / 差額 {:.1}",
+        country.total_revenue(),
+        country.total_expense(),
+        country.net_cash_flow()
+    );
     println!("資源指数: {}", country.resources);
     println!(
         "予算配分: インフラ {:.1}% / 軍事 {:.1}% / 福祉 {:.1}% / 外交 {:.1}%",

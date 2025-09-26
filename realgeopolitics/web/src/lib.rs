@@ -399,6 +399,8 @@ fn app() -> Html {
                             <th>{ "軍事" }</th>
                             <th>{ "支持" }</th>
                             <th>{ "予算" }</th>
+                            <th>{ "収入" }</th>
+                            <th>{ "支出" }</th>
                             <th>{ "資源" }</th>
                         </tr>
                     </thead>
@@ -414,7 +416,9 @@ fn app() -> Html {
                                     <td>{ country.stability }</td>
                                     <td>{ country.military }</td>
                                     <td>{ country.approval }</td>
-                                    <td>{ format!("{:.1}", country.budget) }</td>
+                                    <td>{ format!("{:.1}", country.cash_reserve()) }</td>
+                                    <td>{ format!("{:.1}", country.total_revenue()) }</td>
+                                    <td>{ format!("{:.1}", country.total_expense()) }</td>
                                     <td>{ country.resources }</td>
                                 </tr>
                             }

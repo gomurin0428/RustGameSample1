@@ -14,6 +14,155 @@ const MAX_METRIC: i32 = 100;
 const MIN_METRIC: i32 = 0;
 const MAX_RESOURCES: i32 = 200;
 const MIN_RESOURCES: i32 = 0;
+const HOURS_PER_YEAR: f64 = 24.0 * 365.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CreditRating {
+    AAA,
+    AA,
+    A,
+    BBB,
+    BB,
+    B,
+    CCC,
+    CC,
+    C,
+    D,
+}
+
+impl CreditRating {
+    pub fn base_interest_rate(self) -> f64 {
+        match self {
+            CreditRating::AAA => 0.02,
+            CreditRating::AA => 0.025,
+            CreditRating::A => 0.03,
+            CreditRating::BBB => 0.035,
+            CreditRating::BB => 0.04,
+            CreditRating::B => 0.05,
+            CreditRating::CCC => 0.065,
+            CreditRating::CC => 0.08,
+            CreditRating::C => 0.1,
+            CreditRating::D => 0.18,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RevenueKind {
+    Taxation,
+    ResourceExport,
+    Trade,
+    Aid,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExpenseKind {
+    Infrastructure,
+    Military,
+    Welfare,
+    Diplomacy,
+    DebtService,
+    Administration,
+    Research,
+    Other,
+}
+
+#[derive(Debug, Clone)]
+pub struct RevenueSource {
+    pub kind: RevenueKind,
+    pub amount: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExpenseItem {
+    pub kind: ExpenseKind,
+    pub amount: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FiscalAccount {
+    cash_reserve: f64,
+    pub revenues: Vec<RevenueSource>,
+    pub expenses: Vec<ExpenseItem>,
+    pub debt: f64,
+    pub interest_rate: f64,
+    pub credit_rating: CreditRating,
+}
+
+impl FiscalAccount {
+    pub fn new(initial_cash: f64, rating: CreditRating) -> Self {
+        Self {
+            cash_reserve: initial_cash.max(0.0),
+            revenues: Vec::new(),
+            expenses: Vec::new(),
+            debt: 0.0,
+            interest_rate: rating.base_interest_rate(),
+            credit_rating: rating,
+        }
+    }
+
+    pub fn cash_reserve(&self) -> f64 {
+        self.cash_reserve
+    }
+
+    pub fn set_cash_reserve(&mut self, amount: f64) {
+        self.cash_reserve = amount.max(0.0);
+    }
+
+    pub fn set_credit_rating(&mut self, rating: CreditRating) {
+        self.credit_rating = rating;
+        self.interest_rate = rating.base_interest_rate();
+    }
+
+    pub fn record_revenue(&mut self, kind: RevenueKind, amount: f64) {
+        if amount <= 0.0 {
+            return;
+        }
+        self.revenues.push(RevenueSource { kind, amount });
+        self.cash_reserve += amount;
+    }
+
+    pub fn record_expense(&mut self, kind: ExpenseKind, amount: f64) {
+        if amount <= 0.0 {
+            return;
+        }
+        self.expenses.push(ExpenseItem { kind, amount });
+        self.cash_reserve = (self.cash_reserve - amount).max(0.0);
+    }
+
+    pub fn clear_flows(&mut self) {
+        self.revenues.clear();
+        self.expenses.clear();
+    }
+
+    pub fn total_revenue(&self) -> f64 {
+        self.revenues.iter().map(|item| item.amount).sum()
+    }
+
+    pub fn total_expense(&self) -> f64 {
+        self.expenses.iter().map(|item| item.amount).sum()
+    }
+
+    pub fn net_cash_flow(&self) -> f64 {
+        self.total_revenue() - self.total_expense()
+    }
+
+    pub fn accrue_interest_hours(&mut self, hours: f64) -> f64 {
+        if self.debt <= 0.0 || hours <= 0.0 {
+            return 0.0;
+        }
+        let interest = self.debt * self.interest_rate * (hours / HOURS_PER_YEAR);
+        if interest > 0.0 {
+            self.record_expense(ExpenseKind::DebtService, interest);
+        }
+        interest
+    }
+
+    pub fn add_debt(&mut self, delta: f64) {
+        self.debt = (self.debt + delta).max(0.0);
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountryDefinition {
@@ -91,9 +240,9 @@ pub struct CountryState {
     pub stability: i32,
     pub military: i32,
     pub approval: i32,
-    pub budget: f64,
     pub resources: i32,
     pub relations: HashMap<String, i32>,
+    pub fiscal: FiscalAccount,
     allocations: BudgetAllocation,
 }
 
@@ -102,8 +251,29 @@ impl CountryState {
         self.allocations
     }
 
+    pub fn cash_reserve(&self) -> f64 {
+        self.fiscal.cash_reserve()
+    }
+
+    pub fn total_revenue(&self) -> f64 {
+        self.fiscal.total_revenue()
+    }
+
+    pub fn total_expense(&self) -> f64 {
+        self.fiscal.total_expense()
+    }
+
+    pub fn net_cash_flow(&self) -> f64 {
+        self.fiscal.net_cash_flow()
+    }
+
     fn set_allocations(&mut self, allocations: BudgetAllocation) {
         self.allocations = allocations;
+    }
+
+    #[cfg(test)]
+    pub fn fiscal_mut(&mut self) -> &mut FiscalAccount {
+        &mut self.fiscal
     }
 }
 
@@ -117,6 +287,7 @@ pub struct GameState {
     rng: StdRng,
     scheduler: Scheduler,
     countries: Vec<CountryState>,
+    fiscal_prepared: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -145,18 +316,28 @@ impl GameState {
 
         let mut countries: Vec<CountryState> = definitions
             .into_iter()
-            .map(|definition| CountryState {
-                name: definition.name,
-                government: definition.government,
-                population_millions: definition.population_millions,
-                gdp: definition.gdp,
-                stability: clamp_metric(definition.stability),
-                military: clamp_metric(definition.military),
-                approval: clamp_metric(definition.approval),
-                budget: definition.budget.max(0.0),
-                resources: clamp_resource(definition.resources),
-                relations: HashMap::new(),
-                allocations: default_alloc,
+            .map(|definition| {
+                let initial_cash = definition.budget.max(0.0);
+                let inferred_rating = if definition.approval >= 65 {
+                    CreditRating::A
+                } else if definition.stability >= 60 {
+                    CreditRating::BBB
+                } else {
+                    CreditRating::BB
+                };
+                CountryState {
+                    name: definition.name,
+                    government: definition.government,
+                    population_millions: definition.population_millions,
+                    gdp: definition.gdp,
+                    stability: clamp_metric(definition.stability),
+                    military: clamp_metric(definition.military),
+                    approval: clamp_metric(definition.approval),
+                    resources: clamp_resource(definition.resources),
+                    relations: HashMap::new(),
+                    fiscal: FiscalAccount::new(initial_cash, inferred_rating),
+                    allocations: default_alloc,
+                }
             })
             .collect();
 
@@ -188,6 +369,7 @@ impl GameState {
             rng,
             scheduler,
             countries,
+            fiscal_prepared: false,
         })
     }
 
@@ -286,6 +468,11 @@ impl GameState {
         let scale = effective_minutes / BASE_TICK_MINUTES;
         let mut reports = Vec::new();
 
+        if !self.fiscal_prepared {
+            self.prepare_all_fiscal_flows(scale);
+            self.fiscal_prepared = true;
+        }
+
         let ready_tasks = self.scheduler.next_ready_tasks(&self.clock);
         if ready_tasks.is_empty() {
             reports.push(format!(
@@ -312,11 +499,17 @@ impl GameState {
             reports.extend(country_reports);
         }
 
+        self.fiscal_prepared = false;
         Ok(reports)
     }
 
     fn process_economic_tick(&mut self, scale: f64) -> Vec<String> {
         let mut reports = Vec::new();
+        let already_prepared = self.fiscal_prepared;
+        if !already_prepared {
+            self.prepare_all_fiscal_flows(scale);
+            self.fiscal_prepared = true;
+        }
         for idx in 0..self.countries.len() {
             let mut country_reports = self.apply_budget_effects(idx, scale);
             if let Some(event_report) = self.trigger_random_event(idx, scale) {
@@ -326,6 +519,9 @@ impl GameState {
                 country_reports.push(drift_report);
             }
             reports.extend(country_reports);
+        }
+        if !already_prepared {
+            self.fiscal_prepared = false;
         }
         reports
     }
@@ -357,7 +553,7 @@ impl GameState {
             let slack = (1.0 - allocation.total()).max(0.0);
             if slack > 0.05 {
                 let reserve = country.gdp * slack * 0.01;
-                country.budget += reserve;
+                country.fiscal.record_revenue(RevenueKind::Other, reserve);
                 reports.push(format!(
                     "{} は未配分予算 {:.1} を予備費に積み増しました。",
                     country.name, reserve
@@ -403,6 +599,13 @@ impl GameState {
         reports
     }
 
+    fn prepare_all_fiscal_flows(&mut self, scale: f64) {
+        for country in &mut self.countries {
+            country.fiscal.clear_flows();
+            country.fiscal.accrue_interest_hours(scale);
+        }
+    }
+
     fn apply_budget_effects(&mut self, idx: usize, scale: f64) -> Vec<String> {
         let mut reports = Vec::new();
         let allocation = self.countries[idx].allocations();
@@ -414,7 +617,9 @@ impl GameState {
         };
         {
             let country = &mut self.countries[idx];
-            country.budget += revenue;
+            country
+                .fiscal
+                .record_revenue(RevenueKind::Taxation, revenue);
         }
 
         if total_allocation <= f64::EPSILON {
@@ -423,17 +628,17 @@ impl GameState {
 
         let spending_capacity = {
             let country = &self.countries[idx];
-            country.budget * 0.08 * scale
+            country.fiscal.cash_reserve() * 0.08 * scale
         };
-
-        let mut total_spent = 0.0;
 
         let infra_spend = spending_capacity * allocation.infrastructure;
         if infra_spend > 0.0 {
-            total_spent += infra_spend;
             let name = self.countries[idx].name.clone();
             {
                 let country = &mut self.countries[idx];
+                country
+                    .fiscal
+                    .record_expense(ExpenseKind::Infrastructure, infra_spend);
                 country.gdp += infra_spend * 0.9;
                 country.stability = clamp_metric(country.stability + (4.0 * scale) as i32);
                 country.approval = clamp_metric(country.approval + (3.0 * scale) as i32);
@@ -447,10 +652,12 @@ impl GameState {
 
         let military_spend = spending_capacity * allocation.military;
         if military_spend > 0.0 {
-            total_spent += military_spend;
             let name = self.countries[idx].name.clone();
             {
                 let country = &mut self.countries[idx];
+                country
+                    .fiscal
+                    .record_expense(ExpenseKind::Military, military_spend);
                 country.military = clamp_metric(country.military + (5.0 * scale) as i32);
                 country.stability = clamp_metric(country.stability + (2.0 * scale) as i32);
                 country.approval = clamp_metric(country.approval - (3.0 * scale) as i32);
@@ -465,10 +672,12 @@ impl GameState {
 
         let welfare_spend = spending_capacity * allocation.welfare;
         if welfare_spend > 0.0 {
-            total_spent += welfare_spend;
             let name = self.countries[idx].name.clone();
             {
                 let country = &mut self.countries[idx];
+                country
+                    .fiscal
+                    .record_expense(ExpenseKind::Welfare, welfare_spend);
                 country.approval = clamp_metric(country.approval + (6.0 * scale) as i32);
                 country.stability = clamp_metric(country.stability + (4.0 * scale) as i32);
                 country.gdp = (country.gdp - welfare_spend * 0.25).max(0.0);
@@ -481,18 +690,18 @@ impl GameState {
 
         let diplomacy_spend = spending_capacity * allocation.diplomacy;
         if diplomacy_spend > 0.0 {
-            total_spent += diplomacy_spend;
             let name = self.countries[idx].name.clone();
+            {
+                let country = &mut self.countries[idx];
+                country
+                    .fiscal
+                    .record_expense(ExpenseKind::Diplomacy, diplomacy_spend);
+            }
             self.improve_relations(idx, scale);
             reports.push(format!(
                 "{} が外交関係の改善に取り組んでいます (支出 {:.1})",
                 name, diplomacy_spend
             ));
-        }
-
-        {
-            let country = &mut self.countries[idx];
-            country.budget = (country.budget - total_spent).max(0.0);
         }
 
         reports
@@ -829,12 +1038,12 @@ mod tests {
         }
         let alloc = BudgetAllocation::from_percentages(40.0, 20.0, 20.0, 5.0).unwrap();
         game.update_allocations(0, alloc).unwrap();
-        let before_budget = game.countries()[0].budget;
+        let before_cash = game.countries()[0].cash_reserve();
         let before_gdp = game.countries()[0].gdp;
         let task = ScheduledTask::new(TaskKind::PolicyResolution, 0);
         let reports = task.execute(&mut game, 1.0);
         assert!(reports.iter().any(|r| r.contains("予備費")));
-        assert!(game.countries()[0].budget > before_budget);
+        assert!(game.countries()[0].cash_reserve() > before_cash);
         assert!(game.countries()[0].gdp < before_gdp);
     }
 
@@ -882,8 +1091,31 @@ mod tests {
     }
 
     #[test]
+    fn fiscal_account_records_flows() {
+        let mut account = FiscalAccount::new(100.0, CreditRating::BBB);
+        account.record_revenue(RevenueKind::Taxation, 50.0);
+        account.record_expense(ExpenseKind::Infrastructure, 20.0);
+        assert!((account.cash_reserve() - 130.0).abs() < f64::EPSILON);
+        assert_eq!(account.total_revenue(), 50.0);
+        assert_eq!(account.total_expense(), 20.0);
+        assert!((account.net_cash_flow() - 30.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fiscal_snapshot_updates_after_tick() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 9).unwrap();
+        let before_cash = game.countries()[0].cash_reserve();
+        game.tick_minutes(60.0).unwrap();
+        let country = &game.countries()[0];
+        assert!(country.total_revenue() > 0.0);
+        assert!(country.total_expense() >= 0.0);
+        let net_change = country.cash_reserve() - before_cash;
+        assert!((net_change - country.net_cash_flow()).abs() < 1e-6);
+    }
+
+    #[test]
     fn next_event_minutes_reports_difference() {
-        let game = GameState::from_definitions_with_seed(sample_definitions(), 9).unwrap();
+        let game = GameState::from_definitions_with_seed(sample_definitions(), 10).unwrap();
         let next = game.next_event_minutes().unwrap();
         assert!(next > 0);
     }
