@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Queue Flow Lab</title>
+    <link data-trunk rel="rust" href="Cargo.toml" />
+    <style>
+      :root {
+        color-scheme: dark light;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+      }
+
+      main {
+        display: grid;
+        gap: 20px;
+        padding: clamp(24px, 4vw, 40px);
+        width: min(960px, 92vw);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.6rem, 1.4rem + 1vw, 2.6rem);
+        text-align: center;
+      }
+
+      .layout {
+        display: grid;
+        gap: 24px;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+
+      canvas {
+        width: 100%;
+        height: auto;
+        border-radius: 16px;
+        background: #0b1120;
+        box-shadow: 0 24px 60px rgba(8, 47, 73, 0.5);
+      }
+
+      .controls {
+        display: grid;
+        gap: 16px;
+        align-content: start;
+        background: rgba(15, 23, 42, 0.6);
+        border-radius: 16px;
+        padding: 20px;
+        backdrop-filter: blur(12px);
+      }
+
+      .control-group {
+        display: grid;
+        gap: 6px;
+      }
+
+      label {
+        font-weight: 600;
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        font-size: 0.95rem;
+      }
+
+      input[type="range"],
+      select {
+        width: 100%;
+      }
+
+      button {
+        border: none;
+        border-radius: 999px;
+        padding: 12px 20px;
+        font-weight: 600;
+        cursor: pointer;
+        background: linear-gradient(135deg, #38bdf8, #6366f1);
+        color: #0b1120;
+        transition: transform 120ms ease, box-shadow 120ms ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 30px rgba(99, 102, 241, 0.4);
+      }
+
+      .hint {
+        font-size: 0.9rem;
+        color: #cbd5f5;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Queue Flow Lab</h1>
+        <p class="hint">
+          到着率とサービス率を調整して、M/M/c 待ち行列の混雑具合を体感しましょう。<br />
+          左側の画面には客の流れと主要指標がリアルタイムに表示されます。
+        </p>
+      </header>
+      <div class="layout">
+        <canvas id="game-canvas" width="720" height="480"></canvas>
+        <section class="controls" aria-label="シミュレーション設定">
+          <div class="control-group">
+            <label for="arrival-rate">平均到着率 λ (人/分)<span id="arrival-rate-value">12</span></label>
+            <input id="arrival-rate" type="range" min="2" max="40" value="12" step="1" />
+          </div>
+          <div class="control-group">
+            <label for="service-rate">平均サービス率 μ (人/分・窓口)<span id="service-rate-value">18</span></label>
+            <input id="service-rate" type="range" min="5" max="50" value="18" step="1" />
+          </div>
+          <div class="control-group">
+            <label for="server-count">窓口数 c<span id="server-count-value">2</span></label>
+            <input id="server-count" type="range" min="1" max="5" value="2" step="1" />
+          </div>
+          <div class="control-group">
+            <label for="queue-capacity">待機列上限<span id="queue-capacity-value">25</span></label>
+            <input id="queue-capacity" type="range" min="10" max="60" value="25" step="1" />
+          </div>
+          <div class="control-group">
+            <label for="arrival-variance">到着の揺らぎ<span id="arrival-variance-value">規則的</span></label>
+            <select id="arrival-variance">
+              <option value="deterministic">規則的</option>
+              <option value="poisson" selected>ポアソン</option>
+              <option value="bursty">集中到着</option>
+            </select>
+          </div>
+          <div class="control-group">
+            <label for="service-variance">サービス時間の揺らぎ<span id="service-variance-value">指数分布</span></label>
+            <select id="service-variance">
+              <option value="deterministic">一定</option>
+              <option value="exponential" selected>指数分布</option>
+              <option value="erlang">エルラン</option>
+            </select>
+          </div>
+          <button id="reset-button" type="button">リセット</button>
+          <p class="hint">
+            ρ = λ/(c·μ) が 1 を超えると平均待ち人数が急増します。<br />
+            ρ を 1 未満に保つようコントロールし、顧客の離脱を防ぎましょう。
+          </p>
+        </section>
+      </div>
+    </main>
+    <script type="module">
+      import init from "./orstudy-game1.js";
+
+      init().catch((err) => console.error("wasm 初期化に失敗しました", err));
+    </script>
+  </body>
+</html>
