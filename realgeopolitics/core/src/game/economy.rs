@@ -1,7 +1,7 @@
 pub mod industry;
 pub use industry::{
-    DependencyKind, IndustryCatalog, IndustryCategory, SectorDefinition, SectorDependency,
-    SectorId, SectorState,
+    DependencyKind, IndustryCatalog, IndustryCategory, IndustryRuntime, IndustryTickOutcome,
+    SectorDefinition, SectorDependency, SectorId, SectorState,
 };
 
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,7 @@ pub enum ExpenseKind {
     DebtService,
     Administration,
     Research,
+    IndustrySupport,
     Other,
 }
 

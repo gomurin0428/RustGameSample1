@@ -8,6 +8,11 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
+const EMBEDDED_PRIMARY: &str = include_str!("../../../../config/industries/primary.yaml");
+const EMBEDDED_SECONDARY: &str = include_str!("../../../../config/industries/secondary.yaml");
+const EMBEDDED_TERTIARY: &str = include_str!("../../../../config/industries/tertiary.yaml");
+const EMBEDDED_ENERGY: &str = include_str!("../../../../config/industries/energy.yaml");
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum IndustryCategory {
@@ -190,8 +195,33 @@ impl IndustryCatalog {
         Ok(catalog)
     }
 
+    pub fn from_embedded() -> Result<Self> {
+        let mut catalog = IndustryCatalog::default();
+        let sources = [
+            ("primary", EMBEDDED_PRIMARY),
+            ("secondary", EMBEDDED_SECONDARY),
+            ("tertiary", EMBEDDED_TERTIARY),
+            ("energy", EMBEDDED_ENERGY),
+        ];
+        for (name, content) in sources {
+            let file: CategoryFile = serde_yaml::from_str(content)
+                .with_context(|| format!("組み込み産業定義の解析に失敗しました: {}", name))?;
+            catalog.merge_category(file, Path::new(name))?;
+        }
+        Ok(catalog)
+    }
+
     pub fn sectors(&self) -> impl Iterator<Item = (&SectorId, &SectorDefinition)> {
         self.sectors.iter()
+    }
+
+    pub fn sectors_by_category(
+        &self,
+        category: IndustryCategory,
+    ) -> impl Iterator<Item = (&SectorId, &SectorDefinition)> {
+        self.sectors
+            .iter()
+            .filter(move |(id, _)| id.category == category)
     }
 
     pub fn get(&self, id: &SectorId) -> Option<&SectorDefinition> {
@@ -211,6 +241,188 @@ impl IndustryCatalog {
             self.sectors.insert(id, sector);
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SectorModifier {
+    pub subsidy_bonus: f64,
+    pub efficiency_bonus: f64,
+    pub remaining_minutes: f64,
+}
+
+impl SectorModifier {
+    pub fn decay(&mut self, minutes: f64) {
+        if self.remaining_minutes <= 0.0 {
+            self.subsidy_bonus = 0.0;
+            self.efficiency_bonus = 0.0;
+            return;
+        }
+        let decay = minutes.max(0.0);
+        if decay <= 0.0 {
+            return;
+        }
+        self.remaining_minutes = (self.remaining_minutes - decay).max(0.0);
+        if self.remaining_minutes == 0.0 {
+            self.subsidy_bonus = 0.0;
+            self.efficiency_bonus = 0.0;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SectorMetrics {
+    pub output: f64,
+    pub revenue: f64,
+    pub cost: f64,
+}
+
+#[derive(Debug, Default)]
+pub struct IndustryTickOutcome {
+    pub total_revenue: f64,
+    pub total_cost: f64,
+    pub total_gdp: f64,
+    pub sector_metrics: HashMap<SectorId, SectorMetrics>,
+    pub reports: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndustryRuntime {
+    catalog: IndustryCatalog,
+    states: HashMap<SectorId, SectorState>,
+    modifiers: HashMap<SectorId, SectorModifier>,
+    last_metrics: HashMap<SectorId, SectorMetrics>,
+}
+
+impl IndustryRuntime {
+    pub fn from_catalog(catalog: IndustryCatalog) -> Self {
+        let mut states = HashMap::new();
+        for (id, def) in catalog.sectors() {
+            states.insert(id.clone(), SectorState::from_definition(def, id.category));
+        }
+        Self {
+            catalog,
+            states,
+            modifiers: HashMap::new(),
+            last_metrics: HashMap::new(),
+        }
+    }
+
+    pub fn simulate_tick(&mut self, minutes: f64, scale: f64) -> IndustryTickOutcome {
+        let mut outcome = IndustryTickOutcome::default();
+        const ORDER: [IndustryCategory; 4] = [
+            IndustryCategory::Energy,
+            IndustryCategory::Primary,
+            IndustryCategory::Secondary,
+            IndustryCategory::Tertiary,
+        ];
+        for category in ORDER {
+            let sector_ids: Vec<SectorId> = self
+                .catalog
+                .sectors_by_category(category)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for sector_id in sector_ids {
+                let def = match self.catalog.get(&sector_id) {
+                    Some(def) => def,
+                    None => continue,
+                };
+                let (input_factor, cost_factor, demand_factor) =
+                    Self::compute_dependency_effects(category, def, &outcome.sector_metrics);
+                let state_entry = self
+                    .states
+                    .entry(sector_id.clone())
+                    .or_insert_with(|| SectorState::from_definition(def, category));
+                let modifier = self
+                    .modifiers
+                    .entry(sector_id.clone())
+                    .or_insert_with(SectorModifier::default);
+                let subsidy = modifier.subsidy_bonus.clamp(0.0, 0.9);
+                let efficiency =
+                    (state_entry.efficiency * (1.0 + modifier.efficiency_bonus)).max(0.1);
+
+                let output = def.base_output * efficiency * input_factor.max(0.0) * scale;
+                let mut cost = def.base_cost * cost_factor * scale * (1.0 - subsidy);
+                if cost.is_nan() || cost.is_infinite() || cost < 0.0 {
+                    cost = 0.0;
+                }
+                let price = def.base_cost * (1.0 + def.price_sensitivity * demand_factor).max(0.1);
+                let revenue = output * price;
+                let gdp_contrib = (revenue - cost).max(0.0);
+
+                state_entry.output = output;
+                state_entry.subsidy_rate = subsidy;
+                state_entry.efficiency = (state_entry.efficiency * 0.95) + (efficiency * 0.05);
+                modifier.decay(minutes);
+
+                let metrics = SectorMetrics {
+                    output,
+                    revenue,
+                    cost,
+                };
+                outcome.total_revenue += revenue;
+                outcome.total_cost += cost;
+                outcome.total_gdp += gdp_contrib;
+                outcome
+                    .sector_metrics
+                    .insert(sector_id.clone(), metrics.clone());
+
+                if output > f64::EPSILON {
+                    outcome.reports.push(format!(
+                        "{}: 生産量 {:.1} / 収益 {:.1}",
+                        def.name, output, revenue
+                    ));
+                }
+            }
+        }
+        self.last_metrics = outcome.sector_metrics.clone();
+        outcome
+    }
+
+    fn compute_dependency_effects(
+        category: IndustryCategory,
+        def: &SectorDefinition,
+        metrics: &HashMap<SectorId, SectorMetrics>,
+    ) -> (f64, f64, f64) {
+        let mut input_factor = 1.0;
+        let mut cost_factor = 1.0;
+        let mut demand_factor = 1.0;
+        for dep in &def.dependencies {
+            let dep_id = dep.resolve_sector(category);
+            let supply_ratio = metrics
+                .get(&dep_id)
+                .map(|m| {
+                    let requirement = dep.requirement.max(0.01);
+                    (m.output / (def.base_output * requirement)).clamp(0.0, 2.0)
+                })
+                .unwrap_or(0.0);
+            match dep.dependency {
+                DependencyKind::Input => {
+                    input_factor *= supply_ratio.clamp(0.0, 1.2);
+                }
+                DependencyKind::Cost => {
+                    let adjustment = 1.0 - dep.elasticity * (supply_ratio - 1.0);
+                    cost_factor *= adjustment.clamp(0.5, 1.5);
+                }
+                DependencyKind::Demand => {
+                    let adjustment = 1.0 + dep.elasticity * (supply_ratio - 1.0);
+                    demand_factor *= adjustment.clamp(0.5, 1.5);
+                }
+            }
+        }
+        (
+            input_factor.max(0.0),
+            cost_factor.max(0.1),
+            demand_factor.max(0.5),
+        )
+    }
+
+    pub fn metrics(&self) -> &HashMap<SectorId, SectorMetrics> {
+        &self.last_metrics
+    }
+
+    pub fn catalog(&self) -> &IndustryCatalog {
+        &self.catalog
     }
 }
 

@@ -2,12 +2,13 @@ use anyhow::{Result, anyhow, ensure};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
-#[cfg(test)]
-use super::economy::{ExpenseKind, RevenueKind};
 use super::{
     BASE_TICK_MINUTES, MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES, MINUTES_PER_DAY,
     country::{BudgetAllocation, CountryDefinition, CountryState},
-    economy::{CreditRating, FiscalAccount, FiscalSnapshot, TaxPolicy},
+    economy::{
+        CreditRating, ExpenseKind, FiscalAccount, FiscalSnapshot, IndustryCatalog, IndustryRuntime,
+        IndustryTickOutcome, RevenueKind, TaxPolicy,
+    },
     event_templates::{ScriptedEventState, load_event_templates},
     market::CommodityMarket,
     systems::{diplomacy, events, fiscal, policy},
@@ -24,6 +25,7 @@ pub struct GameState {
     countries: Vec<CountryState>,
     commodity_market: CommodityMarket,
     event_templates: Vec<ScriptedEventState>,
+    industry_runtime: IndustryRuntime,
     fiscal_prepared: bool,
 }
 
@@ -114,6 +116,9 @@ impl GameState {
 
         let commodity_market = CommodityMarket::new(120.0, 7.5, 0.04);
 
+        let industry_catalog = IndustryCatalog::from_embedded().unwrap_or_default();
+        let industry_runtime = IndustryRuntime::from_catalog(industry_catalog);
+
         let mut game = Self {
             clock: GameClock::new(),
             calendar: CalendarDate::from_start(),
@@ -124,6 +129,7 @@ impl GameState {
             countries,
             commodity_market,
             event_templates,
+            industry_runtime,
             fiscal_prepared: false,
         };
         game.capture_fiscal_history();
@@ -302,6 +308,8 @@ impl GameState {
             reports.extend(country_reports);
         }
 
+        reports.extend(self.process_industry_tick(effective_minutes, scale));
+
         self.capture_fiscal_history();
         self.fiscal_prepared = false;
         Ok(reports)
@@ -336,6 +344,7 @@ impl GameState {
         if !already_prepared {
             self.fiscal_prepared = false;
         }
+
         self.capture_fiscal_history();
         reports
     }
@@ -350,6 +359,41 @@ impl GameState {
 
     pub(crate) fn process_diplomatic_pulse(&mut self) -> Vec<String> {
         diplomacy::pulse(&mut self.countries)
+    }
+
+    fn process_industry_tick(&mut self, minutes: f64, scale: f64) -> Vec<String> {
+        if scale <= 0.0 {
+            return Vec::new();
+        }
+        let outcome = self.industry_runtime.simulate_tick(minutes, scale);
+        self.apply_industry_outcome(&outcome);
+        outcome.reports
+    }
+
+    fn apply_industry_outcome(&mut self, outcome: &IndustryTickOutcome) {
+        let count = self.countries.len();
+        if count == 0 {
+            return;
+        }
+        let per_country = count as f64;
+        let revenue_share = outcome.total_revenue / per_country;
+        let cost_share = outcome.total_cost / per_country;
+        let gdp_share = outcome.total_gdp / per_country;
+        for country in self.countries.iter_mut() {
+            if revenue_share > 0.0 {
+                country
+                    .fiscal_mut()
+                    .record_revenue(RevenueKind::Trade, revenue_share);
+            }
+            if cost_share > 0.0 {
+                country
+                    .fiscal_mut()
+                    .record_expense(ExpenseKind::IndustrySupport, cost_share);
+            }
+            if gdp_share.abs() > f64::EPSILON {
+                country.gdp = (country.gdp + gdp_share).max(0.0);
+            }
+        }
     }
 
     pub(crate) fn process_scripted_event(&mut self, template_idx: usize) -> Vec<String> {
