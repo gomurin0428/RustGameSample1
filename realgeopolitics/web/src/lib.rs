@@ -13,7 +13,7 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use web_sys::{HtmlInputElement, HtmlSelectElement, InputEvent};
+use web_sys::{Event, HtmlInputElement, HtmlSelectElement, InputEvent};
 #[cfg(target_arch = "wasm32")]
 use yew::prelude::*;
 
@@ -558,7 +558,7 @@ fn render_core_toggle(
 ) -> Html {
     let onchange = {
         let callback = callback.clone();
-        Callback::from(move |event: InputEvent| {
+        Callback::from(move |event: Event| {
             if let Some(input) = event
                 .target()
                 .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
@@ -573,7 +573,7 @@ fn render_core_toggle(
 
     html! {
         <label class="core-toggle">
-            <input type="checkbox" checked={enabled} onchange={onchange.clone()} />
+            <input type="checkbox" checked={enabled} onchange={onchange} />
             { "コア支出を優先" }
         </label>
     }
@@ -609,5 +609,29 @@ mod tests {
         let options = build_speed_options(1.0, &presets);
         assert!(!options.iter().any(|opt| opt.label.contains("カスタム")));
         assert_eq!(options.len(), presets.len());
+    }
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::*;
+    use std::{cell::RefCell, rc::Rc};
+    use wasm_bindgen_test::*;
+    use yew::Callback;
+
+    #[wasm_bindgen_test]
+    fn render_core_toggle_handles_checkbox_event() {
+        let captured = Rc::new(RefCell::new(None));
+        let sink = captured.clone();
+        let callback = Callback::from(move |change: CoreMinimumChange| {
+            sink.borrow_mut().replace(change.enabled);
+        });
+
+        let node = render_core_toggle(true, 0, callback);
+        match node {
+            yew::virtual_dom::VNode::VTag(_) | yew::virtual_dom::VNode::VComp(_) => {}
+            other => panic!("予期しないノード種別: {:?}", other),
+        }
+        assert!(captured.borrow().is_none());
     }
 }
