@@ -51,7 +51,7 @@ Eversim 社の *Geo-Political Simulator* 系列を意識し、本プロジェク
 - [x] **収支勘定**: 各国に `FiscalAccount` を導入。`RevenueSource`/`ExpenseItem` で直近 tick の収支を追跡し、`credit_rating` に応じた利払いを自動計上。`cash_reserve` は CLI/GUI 両方で参照でき、UI には収入/支出カラムも追加済み。
 - [x] **税制モジュール**: `TaxPolicy` で所得/法人/消費税率と控除を管理。GDP・雇用感応度を考慮した `collect` により即時 70%/遅延 30% の税収を算出し、繰越分は次 tick に自動加算。CLI/GUI で税制指標を可視化済み。
 - [x] **資源・輸出入収益**: `CommodityMarket` を新設し、ランダムウォーク + ショックイベントで価格を更新。資源指数に応じた輸出収入を `RevenueKind::ResourceExport` へ計上し、CLI/GUI に単価を表示。
-- **歳出分類**: 既存の配分を `infra`, `military`, `welfare`, `diplomacy` に加え、債務返済・行政維持・研究開発を追加。配分は `BudgetAllocation` を拡張し、特定比率を最低確保するフラグを持たせる。
+- [x] **歳出分類**: 配分カテゴリを `infra`/`military`/`welfare`/`diplomacy` に債務返済・行政維持・研究開発を追加した 7 区分へ再編。GDP 比率 (%) 指定の `BudgetAllocation` と `ensure_core_minimum` フラグを導入し、CLI の `set` (7 数値 + `core|nocore`) と Web NumericUpDown で同一仕様の割合入力が可能になった。
 - **債務 Dynamics**: `FiscalAccount` の `update_fiscal_cycle()` で利払い・償還・新規発行を処理。信用格付けに応じて利率変動し、一定閾値で債務危機イベントをトリガ。
 - **レポート API**: 国ごとの財政サマリ (`FiscalSnapshot`) を返す関数を用意。UI は折れ線チャートで収支・債務推移を表示。
 

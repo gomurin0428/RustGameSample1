@@ -47,6 +47,22 @@ impl CreditRating {
     }
 }
 
+fn downgrade_rating(rating: CreditRating) -> CreditRating {
+    use CreditRating::*;
+    match rating {
+        AAA => AA,
+        AA => A,
+        A => BBB,
+        BBB => BB,
+        BB => B,
+        B => CCC,
+        CCC => CC,
+        CC => C,
+        C => D,
+        D => D,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RevenueKind {
     Taxation,
@@ -348,55 +364,112 @@ pub struct CountryDefinition {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct BudgetAllocation {
+    /// GDP に対する支出割合 (単位: %)
     pub infrastructure: f64,
+    /// GDP に対する支出割合 (単位: %)
     pub military: f64,
+    /// GDP に対する支出割合 (単位: %)
     pub welfare: f64,
+    /// GDP に対する支出割合 (単位: %)
     pub diplomacy: f64,
+    /// GDP に対する支出割合 (単位: %)
+    pub debt_service: f64,
+    /// GDP に対する支出割合 (単位: %)
+    pub administration: f64,
+    /// GDP に対する支出割合 (単位: %)
+    pub research: f64,
+    #[serde(default)]
+    pub ensure_core_minimum: bool,
 }
 
 impl BudgetAllocation {
-    pub fn new(infrastructure: f64, military: f64, welfare: f64, diplomacy: f64) -> Result<Self> {
-        ensure!(infrastructure.is_finite(), "インフラ配分が不正です");
-        ensure!(military.is_finite(), "軍事配分が不正です");
-        ensure!(welfare.is_finite(), "福祉配分が不正です");
-        ensure!(diplomacy.is_finite(), "外交配分が不正です");
-        ensure!(
-            infrastructure >= 0.0,
-            "インフラ配分は0以上で指定してください"
-        );
-        ensure!(military >= 0.0, "軍事配分は0以上で指定してください");
-        ensure!(welfare >= 0.0, "福祉配分は0以上で指定してください");
-        ensure!(diplomacy >= 0.0, "外交配分は0以上で指定してください");
-        let total = infrastructure + military + welfare + diplomacy;
-        ensure!(
-            total <= 1.0 + f64::EPSILON,
-            "配分の合計が100%を超えています: {:.1}%",
-            total * 100.0
-        );
+    pub fn new(
+        infrastructure: f64,
+        military: f64,
+        welfare: f64,
+        diplomacy: f64,
+        debt_service: f64,
+        administration: f64,
+        research: f64,
+        ensure_core_minimum: bool,
+    ) -> Result<Self> {
+        for (label, value) in [
+            ("インフラ", infrastructure),
+            ("軍事", military),
+            ("福祉", welfare),
+            ("外交", diplomacy),
+            ("債務返済", debt_service),
+            ("行政維持", administration),
+            ("研究開発", research),
+        ] {
+            ensure!(value.is_finite(), "{}予算割合が不正です", label);
+            ensure!(value >= 0.0, "{}予算割合は0以上で指定してください", label);
+        }
         Ok(Self {
             infrastructure,
             military,
             welfare,
             diplomacy,
+            debt_service,
+            administration,
+            research,
+            ensure_core_minimum,
         })
     }
 
-    pub fn from_percentages(
+    pub fn from_values(
         infrastructure: f64,
         military: f64,
         welfare: f64,
         diplomacy: f64,
+        debt_service: f64,
+        administration: f64,
+        research: f64,
     ) -> Result<Self> {
         Self::new(
-            infrastructure / 100.0,
-            military / 100.0,
-            welfare / 100.0,
-            diplomacy / 100.0,
+            infrastructure,
+            military,
+            welfare,
+            diplomacy,
+            debt_service,
+            administration,
+            research,
+            true,
         )
     }
 
-    pub fn total(&self) -> f64 {
-        self.infrastructure + self.military + self.welfare + self.diplomacy
+    pub fn total_percentage(&self) -> f64 {
+        self.infrastructure
+            + self.military
+            + self.welfare
+            + self.diplomacy
+            + self.debt_service
+            + self.administration
+            + self.research
+    }
+
+    pub fn total_requested_amount(&self, gdp: f64) -> f64 {
+        let factor = (gdp.max(0.0)) / 100.0;
+        factor
+            * (self.infrastructure
+                + self.military
+                + self.welfare
+                + self.diplomacy
+                + self.debt_service
+                + self.administration
+                + self.research)
+    }
+
+    pub fn with_core_minimum(mut self, enabled: bool) -> Self {
+        self.ensure_core_minimum = enabled;
+        self
+    }
+}
+
+impl Default for BudgetAllocation {
+    fn default() -> Self {
+        Self::new(8.0, 6.0, 7.0, 5.0, 5.0, 3.5, 4.5, true)
+            .expect("default budget allocation must be valid")
     }
 }
 
@@ -491,7 +564,7 @@ impl GameState {
             "国が1つも定義されていません。最低1件の国を用意してください。"
         );
 
-        let default_alloc = BudgetAllocation::new(0.25, 0.25, 0.25, 0.25)?;
+        let default_alloc = BudgetAllocation::default();
 
         let mut countries: Vec<CountryState> = definitions
             .into_iter()
@@ -743,18 +816,56 @@ impl GameState {
 
     fn process_policy_resolution(&mut self) -> Vec<String> {
         let mut reports = Vec::new();
-        for country in &mut self.countries {
-            let allocation = country.allocations();
-            let slack = (1.0 - allocation.total()).max(0.0);
-            if slack > 0.05 {
-                let reserve = country.gdp * slack * 0.01;
-                country.fiscal.record_revenue(RevenueKind::Other, reserve);
-                reports.push(format!(
-                    "{} は未配分予算 {:.1} を予備費に積み増しました。",
-                    country.name, reserve
-                ));
+        for idx in 0..self.countries.len() {
+            let allocation = self.countries[idx].allocations();
+            let gdp = self.countries[idx].gdp.max(0.0);
+
+            if allocation.ensure_core_minimum {
+                let min_debt = (self.countries[idx].fiscal.debt
+                    * self.countries[idx].fiscal.interest_rate
+                    / 360.0)
+                    .max(40.0);
+                let allocated_debt = (gdp * (allocation.debt_service / 100.0)).max(0.0);
+                if allocated_debt + f64::EPSILON < min_debt {
+                    let country = &mut self.countries[idx];
+                    country.fiscal.add_debt(min_debt * 0.2);
+                    let downgraded = downgrade_rating(country.fiscal.credit_rating);
+                    country.fiscal.set_credit_rating(downgraded);
+                    reports.push(format!(
+                        "{} は債務返済が不足し、信用格付けが低下しました。",
+                        country.name
+                    ));
+                }
+
+                let admin_target = self.essential_administration_target(idx);
+                let allocated_admin = (gdp * (allocation.administration / 100.0)).max(0.0);
+                if allocated_admin + f64::EPSILON < admin_target {
+                    let country = &mut self.countries[idx];
+                    country.stability = clamp_metric(country.stability - 2);
+                    reports.push(format!(
+                        "{} は行政維持費が不足し、行政効率が悪化しています。",
+                        country.name
+                    ));
+                }
             }
-            if country.resources < 25 {
+
+            {
+                let country = &mut self.countries[idx];
+                let requested = allocation.total_requested_amount(gdp);
+                let reserve_bonus = (requested * 0.05).min(country.fiscal.cash_reserve() * 0.02);
+                if reserve_bonus > 0.0 {
+                    country
+                        .fiscal
+                        .record_revenue(RevenueKind::Other, reserve_bonus);
+                    reports.push(format!(
+                        "{} は予備費を {:.1} 積み増しました。",
+                        country.name, reserve_bonus
+                    ));
+                }
+            }
+
+            if self.countries[idx].resources < 25 {
+                let country = &mut self.countries[idx];
                 country.gdp = (country.gdp - 20.0).max(0.0);
                 reports.push(format!(
                     "{} は資源不足で生産が停滞しています。",
@@ -812,6 +923,16 @@ impl GameState {
         }
     }
 
+    fn essential_debt_target(&self, idx: usize) -> f64 {
+        let country = &self.countries[idx];
+        (country.fiscal.debt * country.fiscal.interest_rate / 24.0).clamp(50.0, 300.0)
+    }
+
+    fn essential_administration_target(&self, idx: usize) -> f64 {
+        let country = &self.countries[idx];
+        (country.population_millions * 2.0).max(35.0)
+    }
+
     fn apply_budget_effects(&mut self, idx: usize, scale: f64) -> Vec<String> {
         let mut reports = Vec::new();
         let employment_ratio = self.estimate_employment_ratio(idx);
@@ -846,7 +967,14 @@ impl GameState {
         }
 
         let allocation = self.countries[idx].allocations();
-        let total_allocation = allocation.total();
+        let gdp_amount = gdp.max(0.0);
+        let percent_to_amount = |percent: f64| -> f64 {
+            if percent <= 0.0 || gdp_amount <= 0.0 {
+                0.0
+            } else {
+                gdp_amount * (percent / 100.0)
+            }
+        };
 
         let resource_revenue = self.commodity_market.revenue_for(resources, scale);
         if resource_revenue > 0.0 {
@@ -861,86 +989,169 @@ impl GameState {
             ));
         }
 
-        if total_allocation <= f64::EPSILON {
-            return reports;
-        }
-
-        let spending_capacity = {
-            let country = &self.countries[idx];
-            (country.fiscal.cash_reserve() * 0.08 * scale).min(country.fiscal.cash_reserve())
+        let debt_base = percent_to_amount(allocation.debt_service);
+        let debt_request = if allocation.ensure_core_minimum {
+            debt_base.max(self.essential_debt_target(idx))
+        } else {
+            debt_base
         };
-
-        let infra_spend = spending_capacity * allocation.infrastructure;
-        if infra_spend > 0.0 {
-            let name = self.countries[idx].name.clone();
-            {
+        let debt_desired = debt_request * scale;
+        if debt_desired > 0.0 {
+            let available = self.countries[idx].fiscal.cash_reserve();
+            let actual = debt_desired.min(available);
+            if actual > 0.0 {
                 let country = &mut self.countries[idx];
                 country
                     .fiscal
-                    .record_expense(ExpenseKind::Infrastructure, infra_spend);
-                country.gdp += infra_spend * 0.9;
-                country.stability = clamp_metric(country.stability + (4.0 * scale) as i32);
-                country.approval = clamp_metric(country.approval + (3.0 * scale) as i32);
-                country.resources = clamp_resource(country.resources - (6.0 * scale) as i32);
+                    .record_expense(ExpenseKind::DebtService, actual);
+                let reduction = actual.min(country.fiscal.debt);
+                if reduction > 0.0 {
+                    country.fiscal.add_debt(-reduction);
+                }
+                reports.push(format!(
+                    "{} は債務返済に {:.1} を充当しました。",
+                    country.name, actual
+                ));
+            } else if allocation.ensure_core_minimum {
+                let country = &mut self.countries[idx];
+                country.fiscal.add_debt(debt_desired * 0.25);
+                reports.push(format!(
+                    "{} は債務返済資金が不足し、返済を繰り延べました。",
+                    country.name
+                ));
             }
-            reports.push(format!(
-                "{} がインフラ投資を実施中です (支出 {:.1})",
-                name, infra_spend
-            ));
         }
 
-        let military_spend = spending_capacity * allocation.military;
-        if military_spend > 0.0 {
-            let name = self.countries[idx].name.clone();
-            {
+        let administration_base = percent_to_amount(allocation.administration);
+        let administration_request = if allocation.ensure_core_minimum {
+            administration_base.max(self.essential_administration_target(idx))
+        } else {
+            administration_base
+        };
+        let administration_desired = administration_request * scale;
+        if administration_desired > 0.0 {
+            let available = self.countries[idx].fiscal.cash_reserve();
+            let actual = administration_desired.min(available);
+            if actual > 0.0 {
                 let country = &mut self.countries[idx];
                 country
                     .fiscal
-                    .record_expense(ExpenseKind::Military, military_spend);
-                country.military = clamp_metric(country.military + (5.0 * scale) as i32);
-                country.stability = clamp_metric(country.stability + (2.0 * scale) as i32);
-                country.approval = clamp_metric(country.approval - (3.0 * scale) as i32);
-                country.resources = clamp_resource(country.resources - (4.0 * scale) as i32);
+                    .record_expense(ExpenseKind::Administration, actual);
+                let stability_gain = (actual / 120.0).round() as i32;
+                country.stability = clamp_metric(country.stability + stability_gain);
+                reports.push(format!(
+                    "{} は行政維持に {:.1} を投じています。",
+                    country.name, actual
+                ));
+            } else if allocation.ensure_core_minimum {
+                let country = &mut self.countries[idx];
+                country.stability = clamp_metric(country.stability - 3);
+                reports.push(format!(
+                    "{} は行政費の不足で行政効率が低下しています。",
+                    country.name
+                ));
             }
-            self.adjust_relations_after_military(idx, (-2.0 * scale) as i32);
-            reports.push(format!(
-                "{} が軍事強化に予算を充当しました (支出 {:.1})",
-                name, military_spend
-            ));
         }
 
-        let welfare_spend = spending_capacity * allocation.welfare;
-        if welfare_spend > 0.0 {
-            let name = self.countries[idx].name.clone();
-            {
+        let infra_desired = percent_to_amount(allocation.infrastructure) * scale;
+        if infra_desired > 0.0 {
+            let available = self.countries[idx].fiscal.cash_reserve();
+            let actual = infra_desired.min(available);
+            if actual > 0.0 {
                 let country = &mut self.countries[idx];
                 country
                     .fiscal
-                    .record_expense(ExpenseKind::Welfare, welfare_spend);
-                country.approval = clamp_metric(country.approval + (6.0 * scale) as i32);
-                country.stability = clamp_metric(country.stability + (4.0 * scale) as i32);
-                country.gdp = (country.gdp - welfare_spend * 0.25).max(0.0);
+                    .record_expense(ExpenseKind::Infrastructure, actual);
+                country.gdp += actual * 0.9;
+                let intensity = (actual / 80.0).round() as i32;
+                country.stability = clamp_metric(country.stability + intensity);
+                country.approval = clamp_metric(country.approval + (intensity / 2));
+                country.resources = clamp_resource(country.resources - (actual / 25.0) as i32);
+                reports.push(format!(
+                    "{} がインフラ投資を実施中です (支出 {:.1})",
+                    country.name, actual
+                ));
             }
-            reports.push(format!(
-                "{} が社会福祉を拡充しました (支出 {:.1})",
-                name, welfare_spend
-            ));
         }
 
-        let diplomacy_spend = spending_capacity * allocation.diplomacy;
-        if diplomacy_spend > 0.0 {
-            let name = self.countries[idx].name.clone();
-            {
+        let welfare_desired = percent_to_amount(allocation.welfare) * scale;
+        if welfare_desired > 0.0 {
+            let available = self.countries[idx].fiscal.cash_reserve();
+            let actual = welfare_desired.min(available);
+            if actual > 0.0 {
                 let country = &mut self.countries[idx];
-                country
-                    .fiscal
-                    .record_expense(ExpenseKind::Diplomacy, diplomacy_spend);
+                country.fiscal.record_expense(ExpenseKind::Welfare, actual);
+                let intensity = (actual / 70.0).round() as i32;
+                country.approval = clamp_metric(country.approval + intensity);
+                country.stability = clamp_metric(country.stability + (intensity / 2));
+                country.gdp = (country.gdp - actual * 0.25).max(0.0);
+                reports.push(format!(
+                    "{} が社会福祉を拡充しました (支出 {:.1})",
+                    country.name, actual
+                ));
             }
-            self.improve_relations(idx, scale);
-            reports.push(format!(
-                "{} が外交関係の改善に取り組んでいます (支出 {:.1})",
-                name, diplomacy_spend
-            ));
+        }
+
+        let research_desired = percent_to_amount(allocation.research) * scale;
+        if research_desired > 0.0 {
+            let available = self.countries[idx].fiscal.cash_reserve();
+            let actual = research_desired.min(available);
+            if actual > 0.0 {
+                let country = &mut self.countries[idx];
+                country.fiscal.record_expense(ExpenseKind::Research, actual);
+                country.gdp += actual * 0.6;
+                let innovation = (actual / 90.0).round() as i32;
+                country.resources = clamp_resource(country.resources + innovation);
+                reports.push(format!(
+                    "{} は研究開発に {:.1} を投資しました。",
+                    country.name, actual
+                ));
+            }
+        }
+
+        let diplomacy_desired = percent_to_amount(allocation.diplomacy) * scale;
+        if diplomacy_desired > 0.0 {
+            let available = self.countries[idx].fiscal.cash_reserve();
+            let actual = diplomacy_desired.min(available);
+            if actual > 0.0 {
+                let country_name = self.countries[idx].name.clone();
+                {
+                    let country = &mut self.countries[idx];
+                    country
+                        .fiscal
+                        .record_expense(ExpenseKind::Diplomacy, actual);
+                }
+                let relation_scale = (actual / 120.0).max(scale);
+                self.improve_relations(idx, relation_scale);
+                reports.push(format!(
+                    "{} が外交関係の改善に取り組んでいます (支出 {:.1})",
+                    country_name, actual
+                ));
+            }
+        }
+
+        let military_desired = percent_to_amount(allocation.military) * scale;
+        if military_desired > 0.0 {
+            let available = self.countries[idx].fiscal.cash_reserve();
+            let actual = military_desired.min(available);
+            if actual > 0.0 {
+                let country_name = self.countries[idx].name.clone();
+                {
+                    let country = &mut self.countries[idx];
+                    country.fiscal.record_expense(ExpenseKind::Military, actual);
+                    let intensity = (actual / 80.0).round() as i32;
+                    country.military = clamp_metric(country.military + intensity);
+                    country.stability = clamp_metric(country.stability + (intensity / 2));
+                    country.approval = clamp_metric(country.approval - (intensity / 2));
+                    country.resources = clamp_resource(country.resources - (actual / 40.0) as i32);
+                }
+                let relation_penalty = -((2.0 * scale.max(1.0)).round() as i32);
+                self.adjust_relations_after_military(idx, relation_penalty);
+                reports.push(format!(
+                    "{} が軍事強化に予算を充当しました (支出 {:.1})",
+                    country_name, actual
+                ));
+            }
         }
 
         reports
@@ -1155,15 +1366,63 @@ mod tests {
     }
 
     #[test]
-    fn allocations_must_not_exceed_100_percent() {
-        let result = BudgetAllocation::from_percentages(40.0, 30.0, 20.0, 15.0);
+    fn allocations_reject_negative_values() {
+        let result = BudgetAllocation::new(-5.0, 3.0, 4.0, 2.0, 1.0, 1.0, 1.0, true);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn core_minimum_penalises_underfunding() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 13).unwrap();
+        {
+            let country = &mut game.countries_mut()[0];
+            country.fiscal_mut().add_debt(400.0);
+        }
+        let baseline_rating = game.countries()[0].fiscal.credit_rating;
+        let baseline_stability = game.countries()[0].stability;
+        let allocation = BudgetAllocation::new(4.5, 3.0, 3.5, 2.0, 1.0, 1.2, 1.0, true).unwrap();
+        game.update_allocations(0, allocation).unwrap();
+        let task = ScheduledTask::new(TaskKind::PolicyResolution, 0);
+        let reports = task.execute(&mut game, 1.0);
+        assert!(
+            reports
+                .iter()
+                .any(|report| report.contains("信用格付けが低下しました"))
+        );
+        let country = &game.countries()[0];
+        assert_ne!(country.fiscal.credit_rating, baseline_rating);
+        assert!(country.fiscal.debt > 400.0);
+        assert!(country.stability < baseline_stability);
+    }
+
+    #[test]
+    fn disabling_core_minimum_avoids_penalty() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 14).unwrap();
+        {
+            let country = &mut game.countries_mut()[0];
+            country.fiscal_mut().add_debt(400.0);
+        }
+        let baseline_rating = game.countries()[0].fiscal.credit_rating;
+        let baseline_stability = game.countries()[0].stability;
+        let allocation = BudgetAllocation::new(4.5, 3.0, 3.5, 2.0, 1.0, 1.2, 1.0, false).unwrap();
+        game.update_allocations(0, allocation).unwrap();
+        let task = ScheduledTask::new(TaskKind::PolicyResolution, 0);
+        let reports = task.execute(&mut game, 1.0);
+        assert!(
+            !reports
+                .iter()
+                .any(|report| report.contains("信用格付けが低下しました"))
+        );
+        let country = &game.countries()[0];
+        assert_eq!(country.fiscal.credit_rating, baseline_rating);
+        assert_eq!(country.stability, baseline_stability);
+        assert!(country.fiscal.debt >= 400.0);
     }
 
     #[test]
     fn infrastructure_allocation_increases_gdp() {
         let mut game = GameState::from_definitions_with_seed(sample_definitions(), 1).unwrap();
-        let alloc = BudgetAllocation::from_percentages(60.0, 10.0, 15.0, 10.0).unwrap();
+        let alloc = BudgetAllocation::new(15.0, 5.0, 6.0, 3.0, 5.0, 3.0, 4.0, true).unwrap();
         game.update_allocations(0, alloc).unwrap();
         let before_gdp = game.countries()[0].gdp;
         let reports = game.tick_minutes(120.0).unwrap();
@@ -1179,7 +1438,7 @@ mod tests {
             .get("Borealis")
             .copied()
             .unwrap();
-        let alloc = BudgetAllocation::from_percentages(10.0, 10.0, 10.0, 60.0).unwrap();
+        let alloc = BudgetAllocation::new(5.0, 4.0, 4.0, 18.0, 4.0, 3.0, 3.0, true).unwrap();
         game.update_allocations(0, alloc).unwrap();
         game.tick_minutes(180.0).unwrap();
         let after = game.countries()[0]
@@ -1247,7 +1506,7 @@ mod tests {
     #[test]
     fn scheduled_task_economic_tick_applies_budget_effects() {
         let mut game = GameState::from_definitions_with_seed(sample_definitions(), 3).unwrap();
-        let alloc = BudgetAllocation::from_percentages(50.0, 20.0, 20.0, 5.0).unwrap();
+        let alloc = BudgetAllocation::new(14.0, 8.0, 6.0, 4.0, 6.0, 3.5, 5.0, true).unwrap();
         game.update_allocations(0, alloc).unwrap();
         let task = ScheduledTask::new(TaskKind::EconomicTick, 0);
         let reports = task.execute(&mut game, 1.0);
@@ -1275,7 +1534,7 @@ mod tests {
             let countries = game.countries_mut();
             countries[0].resources = 20;
         }
-        let alloc = BudgetAllocation::from_percentages(40.0, 20.0, 20.0, 5.0).unwrap();
+        let alloc = BudgetAllocation::new(10.0, 6.0, 6.0, 4.0, 6.0, 5.0, 4.0, true).unwrap();
         game.update_allocations(0, alloc).unwrap();
         let before_cash = game.countries()[0].cash_reserve();
         let before_gdp = game.countries()[0].gdp;

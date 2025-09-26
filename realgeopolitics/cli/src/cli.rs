@@ -68,13 +68,35 @@ fn dispatch_command(game: &mut GameState, input: &str) -> Result<()> {
             let military = parse_percentage(parts.next(), "軍事")?;
             let welfare = parse_percentage(parts.next(), "福祉")?;
             let diplomacy = parse_percentage(parts.next(), "外交")?;
-            let allocation =
-                BudgetAllocation::from_percentages(infra, military, welfare, diplomacy)?;
+            let debt_service = parse_percentage(parts.next(), "債務返済")?;
+            let administration = parse_percentage(parts.next(), "行政維持")?;
+            let research = parse_percentage(parts.next(), "研究開発")?;
+            let ensure_core = match parts.next() {
+                Some(flag) if flag.eq_ignore_ascii_case("core") => true,
+                Some(flag) if flag.eq_ignore_ascii_case("nocore") => false,
+                Some(other) => {
+                    return Err(anyhow!(
+                        "未知のフラグです: {} (core または nocore を指定してください)",
+                        other
+                    ));
+                }
+                None => true,
+            };
+            let allocation = BudgetAllocation::new(
+                infra,
+                military,
+                welfare,
+                diplomacy,
+                debt_service,
+                administration,
+                research,
+                ensure_core,
+            )?;
             game.update_allocations(idx, allocation)?;
             println!(
                 "{} の予算配分を更新しました (合計 {:.1}%)",
                 game.countries()[idx].name,
-                allocation.total() * 100.0
+                allocation.total_percentage()
             );
             Ok(())
         }
@@ -118,7 +140,8 @@ fn print_help() {
     println!("利用可能なコマンド:");
     println!("  overview              主要指標と配分を一覧表示");
     println!("  inspect <国>          選択した国の詳細と外交関係を表示");
-    println!("  set <国> <i> <m> <w> <d>   予算配分を百分率で設定 (合計100%以内)");
+    println!("  set <国> <infra> <mil> <welfare> <diplo> <debt> <admin> <research> [core|nocore]");
+    println!("                       各カテゴリのGDP比率(%)を入力 (core で必須支出を優先)");
     println!("  tick <分>             指定した分だけシミュレーションを進める");
     println!("  speed <倍率|slow|normal|fast>  時間倍率を変更");
     println!("  quit                  終了");
@@ -137,13 +160,13 @@ fn print_overview(game: &GameState) {
         game.commodity_price()
     );
     println!(
-        "ID | {:<18} | {:<22} | {:>9} | {:>4} | {:>4} | {:>4} | {:>9} | alloc(i/m/w/d)",
+        "ID | {:<18} | {:<22} | {:>9} | {:>4} | {:>4} | {:>4} | {:>9} | alloc%(i/m/w/d/debt/adm/res)",
         "国名", "政体", "GDP", "安定", "軍事", "支持", "予算"
     );
     for (idx, country) in game.countries().iter().enumerate() {
         let alloc = country.allocations();
         println!(
-            "{:>2} | {:<18} | {:<22} | {:>9.1} | {:>4} | {:>4} | {:>4} | {:>9.1} | {:>4.0}/{:>4.0}/{:>4.0}/{:>4.0}",
+            "{:>2} | {:<18} | {:<22} | {:>9.1} | {:>4} | {:>4} | {:>4} | {:>9.1} | {:>6.1}%/{:>6.1}%/{:>6.1}%/{:>6.1}%/{:>6.1}%/{:>6.1}%/{:>6.1}%",
             idx + 1,
             country.name,
             country.government,
@@ -152,10 +175,13 @@ fn print_overview(game: &GameState) {
             country.military,
             country.approval,
             country.cash_reserve(),
-            alloc.infrastructure * 100.0,
-            alloc.military * 100.0,
-            alloc.welfare * 100.0,
-            alloc.diplomacy * 100.0
+            alloc.infrastructure,
+            alloc.military,
+            alloc.welfare,
+            alloc.diplomacy,
+            alloc.debt_service,
+            alloc.administration,
+            alloc.research
         );
     }
 }
@@ -188,11 +214,19 @@ fn print_country_details(game: &GameState, idx: usize) {
     );
     println!("資源指数: {}", country.resources);
     println!(
-        "予算配分: インフラ {:.1}% / 軍事 {:.1}% / 福祉 {:.1}% / 外交 {:.1}%",
-        alloc.infrastructure * 100.0,
-        alloc.military * 100.0,
-        alloc.welfare * 100.0,
-        alloc.diplomacy * 100.0
+        "予算配分 (GDP比%): インフラ {:.1}% / 軍事 {:.1}% / 福祉 {:.1}% / 外交 {:.1}% / 債務 {:.1}% / 行政 {:.1}% / 研究 {:.1}{}",
+        alloc.infrastructure,
+        alloc.military,
+        alloc.welfare,
+        alloc.diplomacy,
+        alloc.debt_service,
+        alloc.administration,
+        alloc.research,
+        if alloc.ensure_core_minimum {
+            " / コア維持"
+        } else {
+            ""
+        }
     );
     println!("外交関係:");
     let mut relations: Vec<_> = country.relations.iter().collect();
@@ -212,11 +246,16 @@ fn resolve_country_index(game: &GameState, token: &str) -> Result<usize> {
 }
 
 fn parse_percentage(value: Option<&str>, label: &str) -> Result<f64> {
-    let value = value.ok_or_else(|| anyhow!("{}予算の百分率を指定してください。", label))?;
+    let value = value.ok_or_else(|| anyhow!("{}予算の割合(%)を指定してください。", label))?;
     let percent: f64 = value
         .parse()
-        .map_err(|_| anyhow!("{}予算は数値で指定してください。", label))?;
-    ensure!(percent >= 0.0, "{}予算は0以上で指定してください。", label);
+        .map_err(|_| anyhow!("{}予算割合は数値で指定してください。", label))?;
+    ensure!(percent.is_finite(), "{}予算割合が不正です", label);
+    ensure!(
+        percent >= 0.0,
+        "{}予算割合は0以上で指定してください。",
+        label
+    );
     Ok(percent)
 }
 

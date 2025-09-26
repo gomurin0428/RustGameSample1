@@ -13,7 +13,7 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use web_sys::{HtmlInputElement, HtmlSelectElement};
+use web_sys::{HtmlInputElement, HtmlSelectElement, InputEvent};
 #[cfg(target_arch = "wasm32")]
 use yew::prelude::*;
 
@@ -92,52 +92,66 @@ struct AllocationForm {
     military: f64,
     welfare: f64,
     diplomacy: f64,
+    debt_service: f64,
+    administration: f64,
+    research: f64,
+    ensure_core_minimum: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
 impl AllocationForm {
     fn from_allocation(allocation: BudgetAllocation) -> Self {
         Self {
-            infrastructure: allocation.infrastructure * 100.0,
-            military: allocation.military * 100.0,
-            welfare: allocation.welfare * 100.0,
-            diplomacy: allocation.diplomacy * 100.0,
+            infrastructure: allocation.infrastructure,
+            military: allocation.military,
+            welfare: allocation.welfare,
+            diplomacy: allocation.diplomacy,
+            debt_service: allocation.debt_service,
+            administration: allocation.administration,
+            research: allocation.research,
+            ensure_core_minimum: allocation.ensure_core_minimum,
         }
     }
 
-    fn update(mut self, field: AllocationField, value: f64) -> Self {
-        let clamped = value.clamp(0.0, 100.0);
+    fn update_amount(mut self, field: AllocationField, value: f64) -> Self {
+        let clamped = value.max(0.0);
         match field {
             AllocationField::Infrastructure => self.infrastructure = clamped,
             AllocationField::Military => self.military = clamped,
             AllocationField::Welfare => self.welfare = clamped,
             AllocationField::Diplomacy => self.diplomacy = clamped,
-        }
-        self.normalize()
-    }
-
-    fn normalize(mut self) -> Self {
-        let total = self.total();
-        if total > 100.0 + f64::EPSILON {
-            let factor = 100.0 / total;
-            self.infrastructure *= factor;
-            self.military *= factor;
-            self.welfare *= factor;
-            self.diplomacy *= factor;
+            AllocationField::DebtService => self.debt_service = clamped,
+            AllocationField::Administration => self.administration = clamped,
+            AllocationField::Research => self.research = clamped,
         }
         self
     }
 
+    fn set_core_minimum(mut self, enabled: bool) -> Self {
+        self.ensure_core_minimum = enabled;
+        self
+    }
+
     fn total(&self) -> f64 {
-        self.infrastructure + self.military + self.welfare + self.diplomacy
+        self.infrastructure
+            + self.military
+            + self.welfare
+            + self.diplomacy
+            + self.debt_service
+            + self.administration
+            + self.research
     }
 
     fn to_budget_allocation(&self) -> Result<BudgetAllocation, String> {
-        BudgetAllocation::from_percentages(
+        BudgetAllocation::new(
             self.infrastructure,
             self.military,
             self.welfare,
             self.diplomacy,
+            self.debt_service,
+            self.administration,
+            self.research,
+            self.ensure_core_minimum,
         )
         .map_err(|err| err.to_string())
     }
@@ -150,6 +164,9 @@ enum AllocationField {
     Military,
     Welfare,
     Diplomacy,
+    DebtService,
+    Administration,
+    Research,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -250,16 +267,47 @@ fn app() -> Html {
         })
     };
 
-    let update_slider = {
+    let update_amount = {
         let game = game.clone();
         let forms = allocation_forms.clone();
         let message = message.clone();
-        Callback::from(move |payload: SliderChange| {
+        Callback::from(move |payload: AllocationAmountChange| {
             let mut current_forms = (*forms).clone();
             if payload.country_idx >= current_forms.len() {
                 return;
             }
-            let updated = current_forms[payload.country_idx].update(payload.field, payload.value);
+            let updated =
+                current_forms[payload.country_idx].update_amount(payload.field, payload.value);
+            match updated.to_budget_allocation() {
+                Ok(allocation) => {
+                    if let Err(err) = game
+                        .borrow_mut()
+                        .update_allocations(payload.country_idx, allocation)
+                    {
+                        message.set(Some(err.to_string()));
+                        return;
+                    }
+                    current_forms[payload.country_idx] = updated;
+                    forms.set(current_forms);
+                    message.set(None);
+                }
+                Err(err) => {
+                    message.set(Some(err));
+                }
+            }
+        })
+    };
+
+    let update_core = {
+        let game = game.clone();
+        let forms = allocation_forms.clone();
+        let message = message.clone();
+        Callback::from(move |payload: CoreMinimumChange| {
+            let mut current_forms = (*forms).clone();
+            if payload.country_idx >= current_forms.len() {
+                return;
+            }
+            let updated = current_forms[payload.country_idx].set_core_minimum(payload.enabled);
             match updated.to_budget_allocation() {
                 Ok(allocation) => {
                     if let Err(err) = game
@@ -304,8 +352,12 @@ fn app() -> Html {
             military: 0.0,
             welfare: 0.0,
             diplomacy: 0.0,
+            debt_service: 0.0,
+            administration: 0.0,
+            research: 0.0,
+            ensure_core_minimum: true,
         });
-    let remaining = (100.0 - current_allocation.total()).max(0.0);
+    let total_budget = current_allocation.total();
 
     let relations: Vec<(String, i32)> = countries
         .get(current_idx)
@@ -375,17 +427,20 @@ fn app() -> Html {
                     </select>
                 </label>
                 <div class="allocation-summary">
-                    <span>{ format!("配分合計: {:.1}%", current_allocation.total()) }</span>
-                    <span>{ format!("未割当: {:.1}%", remaining) }</span>
+                    <span>{ format!("配分合計: {:.1}%", total_budget) }</span>
+                    { render_core_toggle(current_allocation.ensure_core_minimum, current_idx, update_core.clone()) }
                 </div>
             </section>
 
-            <section class="sliders">
-                <h2>{ "予算配分" }</h2>
-                { render_slider("インフラ", current_allocation.infrastructure, current_idx, AllocationField::Infrastructure, update_slider.clone()) }
-                { render_slider("軍事", current_allocation.military, current_idx, AllocationField::Military, update_slider.clone()) }
-                { render_slider("福祉", current_allocation.welfare, current_idx, AllocationField::Welfare, update_slider.clone()) }
-                { render_slider("外交", current_allocation.diplomacy, current_idx, AllocationField::Diplomacy, update_slider.clone()) }
+            <section class="allocations">
+                <h2>{ "予算配分 (GDP比率 %)" }</h2>
+                { render_amount_input("インフラ", current_allocation.infrastructure, current_idx, AllocationField::Infrastructure, update_amount.clone()) }
+                { render_amount_input("軍事", current_allocation.military, current_idx, AllocationField::Military, update_amount.clone()) }
+                { render_amount_input("福祉", current_allocation.welfare, current_idx, AllocationField::Welfare, update_amount.clone()) }
+                { render_amount_input("外交", current_allocation.diplomacy, current_idx, AllocationField::Diplomacy, update_amount.clone()) }
+                { render_amount_input("債務返済", current_allocation.debt_service, current_idx, AllocationField::DebtService, update_amount.clone()) }
+                { render_amount_input("行政維持", current_allocation.administration, current_idx, AllocationField::Administration, update_amount.clone()) }
+                { render_amount_input("研究開発", current_allocation.research, current_idx, AllocationField::Research, update_amount.clone()) }
             </section>
 
             <section class="overview">
@@ -400,7 +455,7 @@ fn app() -> Html {
                             <th>{ "安定" }</th>
                             <th>{ "軍事" }</th>
                             <th>{ "支持" }</th>
-                            <th>{ "予算" }</th>
+                            <th>{ "予算残高" }</th>
                             <th>{ "収入" }</th>
                             <th>{ "支出" }</th>
                             <th>{ "資源" }</th>
@@ -448,19 +503,26 @@ fn app() -> Html {
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone)]
-struct SliderChange {
+struct AllocationAmountChange {
     country_idx: usize,
     field: AllocationField,
     value: f64,
 }
 
 #[cfg(target_arch = "wasm32")]
-fn render_slider(
+#[derive(Clone)]
+struct CoreMinimumChange {
+    country_idx: usize,
+    enabled: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_amount_input(
     label: &str,
     value: f64,
     country_idx: usize,
     field: AllocationField,
-    callback: Callback<SliderChange>,
+    callback: Callback<AllocationAmountChange>,
 ) -> Html {
     let onchange = {
         let callback = callback.clone();
@@ -470,7 +532,7 @@ fn render_slider(
                 .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
             {
                 if let Ok(value) = input.value().parse::<f64>() {
-                    callback.emit(SliderChange {
+                    callback.emit(AllocationAmountChange {
                         country_idx,
                         field,
                         value,
@@ -481,10 +543,39 @@ fn render_slider(
     };
 
     html! {
-        <div class="slider-row">
+        <div class="amount-row">
             <label>{ format!("{}: {:.1}%", label, value) }</label>
-            <input type="range" min="0" max="100" step="1" value={format!("{:.0}", value)} oninput={onchange} />
+            <input type="number" min="0" step="0.5" value={format!("{:.1}", value)} oninput={onchange} />
         </div>
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_core_toggle(
+    enabled: bool,
+    country_idx: usize,
+    callback: Callback<CoreMinimumChange>,
+) -> Html {
+    let onchange = {
+        let callback = callback.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(input) = event
+                .target()
+                .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
+            {
+                callback.emit(CoreMinimumChange {
+                    country_idx,
+                    enabled: input.checked(),
+                });
+            }
+        })
+    };
+
+    html! {
+        <label class="core-toggle">
+            <input type="checkbox" checked={enabled} onchange={onchange.clone()} />
+            { "コア支出を優先" }
+        </label>
     }
 }
 
