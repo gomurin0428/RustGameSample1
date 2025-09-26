@@ -11,6 +11,7 @@
 - `realgeopolitics` の CLI 版を起動する際は `config/countries.json` が必須です。ファイルが存在しない・JSON が壊れている場合は即座にエラー終了します。国を追加する時も JSON の配列構造と各フィールド名を崩さないよう注意してください。
 - ブラウザ版 (`realgeopolitics-web`) をビルドするには Rust の `wasm32-unknown-unknown` ターゲットと `trunk` コマンドが必要です。`cargo build -p realgeopolitics-web --target wasm32-unknown-unknown` で wasm のテストビルドができます。`trunk serve` を使う際は `realgeopolitics/web` ディレクトリで実行してください。
 - `realgeopolitics-core` の `game` モジュールは複数ファイルに分割されています。`CountryState` を初期化する際は `CountryState::new(...)` を利用し、構造体リテラルで private フィールドを書き換えないでください（モジュール外からはアクセスできません）。
+- `GameState::tick_minutes` は `fiscal_prepared` フラグとスケジューラ準備を前提にしています。個別サブシステムだけ呼びたい場合は、`game::systems::fiscal::prepare_all_fiscal_flows` → 目的のシステム関数 → `GameState::capture_fiscal_history` の順序を守ってください。順序を崩すと財政履歴やレポートの整合性が崩れ、テストも失敗します。
 - crate ルートから再エクスポートされる型は `GameState` / `CountryState` / `CountryDefinition` / `BudgetAllocation` / `TaxPolicy` / `TaxPolicyConfig` / `TimeStatus` に絞られました。以前 `CreditRating` や `CommodityMarket` を直接インポートしていたコードは `game` モジュール内の実装詳細として扱われるため、必要なら `GameState` 経由のメソッドを利用してください。
 - 低レベルのロジックは `game::systems::{fiscal, policy, diplomacy, events, tasks}` に分割されています。予算ロジックや外交ロジックを拡張する際は `GameState` に直接ロジックを追加せず、該当サブシステム内の関数を修正してください。
 - CLI 版で `set` コマンドを使う場合は、インフラ/軍事/福祉/外交/債務返済/行政維持/研究開発の順で GDP 比率 (％) を 7 つ入力し、必要に応じて末尾に `core` または `nocore` を付けてください。合計値に上限制約はありませんが、旧仕様（割合正規化）向けのスクリプトを使い続けると引数不足で失敗するため移行時は確認してください。Web 版も NumericUpDown で同じ割合を扱い、自動正規化は行われません。
