@@ -34,3 +34,4 @@
 - 2025-09-26 19:28:36 realgeopolitics-core に `game::bootstrap::GameBuilder` を追加し、国初期化・スケジューラ登録・イベントテンプレート読込を移譲。`GameState` は完成済み依存 (`GameBootstrap`) の受け取りに専念するよう再構成し、`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe build` の成功でビルドを確認。
 - 2025-09-26 19:35:08 GameBuilder 向けユニットテストを追加し、定義未指定時のエラーと初期化依存が揃う正常系を検証。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` が成功したことを確認。
 - 2025-09-26 19:44:46 GameState の時間管理を `game::time::SimulationClock` に切り出し、tick 処理・時間倍率・カレンダー進行を委譲。関連ドキュメントを更新しつつ `C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` の成功を確認。
+- 2025-09-26 20:00:22 SimulationClock の異常系テストを追加し、ゼロ・負値・非有限な時間入力および不正な時間倍率を検証。`C:\Users\gomur\.cargo\bin\cargo.exe fmt` と `C:\Users\gomur\.cargo\bin\cargo.exe test --workspace` の成功で動作確認。

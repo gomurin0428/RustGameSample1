@@ -86,3 +86,48 @@ impl SimulationClock {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_time_multiplier_rejects_non_positive() {
+        let mut clock = SimulationClock::new(Scheduler::new());
+        let err = clock
+            .set_time_multiplier(0.0)
+            .expect_err("0.0 should be rejected");
+        assert!(err.to_string().contains("時間倍率"));
+        let err = clock
+            .set_time_multiplier(f64::NAN)
+            .expect_err("NaN should be rejected");
+        assert!(err.to_string().contains("時間倍率"));
+    }
+
+    #[test]
+    fn advance_rejects_non_positive_minutes() {
+        let mut clock = SimulationClock::new(Scheduler::new());
+        let err = clock.advance(0.0).err().expect("0.0 should be rejected");
+        assert!(err.to_string().contains("時間は正の値"));
+        let err = clock
+            .advance(-5.0)
+            .err()
+            .expect("negative should be rejected");
+        assert!(err.to_string().contains("時間は正の値"));
+    }
+
+    #[test]
+    fn advance_rejects_non_finite_minutes() {
+        let mut clock = SimulationClock::new(Scheduler::new());
+        let err = clock
+            .advance(f64::NAN)
+            .err()
+            .expect("NaN should be rejected");
+        assert!(err.to_string().contains("時間が不正"));
+        let err = clock
+            .advance(f64::INFINITY)
+            .err()
+            .expect("infinity should be rejected");
+        assert!(err.to_string().contains("時間が不正"));
+    }
+}
