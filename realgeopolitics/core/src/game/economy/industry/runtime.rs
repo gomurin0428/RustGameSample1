@@ -6,11 +6,12 @@ use super::model::{
     IndustryCatalog, IndustryCategory, IndustryTickOutcome, SectorId, SectorMetrics,
     SectorModifier, SectorOverview, SectorState,
 };
-use super::{Reporter, SectorMetricsStore, effects};
+use super::{Reporter, SectorMetricsStore, SectorRegistry, effects};
 
 #[derive(Debug, Clone)]
 pub struct IndustryRuntime {
     catalog: IndustryCatalog,
+    registry: SectorRegistry,
     states: HashMap<SectorId, SectorState>,
     modifiers: HashMap<SectorId, SectorModifier>,
     metrics_store: SectorMetricsStore,
@@ -28,8 +29,10 @@ impl IndustryRuntime {
             }
             states.insert(id.clone(), SectorState::from_definition(def, id.category));
         }
+        let registry = SectorRegistry::from_catalog(&catalog);
         Self {
             catalog,
+            registry,
             states,
             modifiers: HashMap::new(),
             metrics_store: SectorMetricsStore::new(),
@@ -194,8 +197,12 @@ impl IndustryRuntime {
         }
     }
 
+    pub fn registry(&self) -> &SectorRegistry {
+        &self.registry
+    }
+
     pub fn resolve_sector_token(&self, token: &str) -> Result<SectorId> {
-        effects::resolve_sector_token(&self.catalog, token)
+        self.registry.resolve(token)
     }
 
     pub fn apply_subsidy(&mut self, id: &SectorId, percent: f64) -> Result<SectorOverview> {

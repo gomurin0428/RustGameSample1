@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, ensure};
 
 use super::model::{
     DependencyKind, IndustryCatalog, IndustryCategory, SectorDefinition, SectorId, SectorMetrics,
@@ -22,40 +21,6 @@ impl Default for DependencyImpact {
             cost_multiplier: 1.0,
             demand_multiplier: 1.0,
         }
-    }
-}
-
-pub(crate) fn resolve_sector_token(catalog: &IndustryCatalog, token: &str) -> Result<SectorId> {
-    let raw = token.trim();
-    ensure!(!raw.is_empty(), "セクターを指定してください。");
-    let mut splits = raw.split(|c| c == ':' || c == '/');
-    let first = splits.next().expect("split は少なくとも1要素");
-    if let Some(second) = splits.next() {
-        let category = IndustryCategory::from_str(first)?;
-        let key = second.trim();
-        ensure!(!key.is_empty(), "セクターキーが空です。");
-        let id = SectorId::new(category, key);
-        ensure!(
-            catalog.get(&id).is_some(),
-            "指定されたセクターは存在しません: {}",
-            raw
-        );
-        return Ok(id);
-    }
-
-    let mut matches = catalog
-        .sectors()
-        .filter(|(id, _)| id.key.eq_ignore_ascii_case(raw))
-        .map(|(id, _)| id.clone())
-        .collect::<Vec<_>>();
-    matches.sort_by(|a, b| a.category.cmp(&b.category));
-    match matches.len() {
-        0 => bail!("セクターが見つかりません: {}", raw),
-        1 => Ok(matches.remove(0)),
-        _ => bail!(
-            "セクター名が複数カテゴリに存在します: {} (category:key 形式で指定してください)",
-            raw
-        ),
     }
 }
 

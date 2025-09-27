@@ -6,13 +6,14 @@ use rand::rngs::StdRng;
 use super::{
     bootstrap::{GameBootstrap, GameBuilder},
     country::{BudgetAllocation, CountryDefinition, CountryState},
-    economy::{FiscalSnapshot, SectorOverview},
+    economy::{FiscalSnapshot, SectorId, SectorOverview},
     event_templates::ScriptedEventState,
     industry::IndustryEngine,
     market::CommodityMarket,
     systems::facade::SystemsFacade,
     time::SimulationClock,
 };
+use crate::game::economy::industry::SectorRegistry;
 use crate::{CalendarDate, ScheduledTask};
 
 pub struct GameState {
@@ -89,8 +90,21 @@ impl GameState {
         self.industry_engine.overview()
     }
 
+    pub fn sector_registry(&self) -> &SectorRegistry {
+        self.industry_engine.sector_registry()
+    }
+
     pub fn apply_industry_subsidy(&mut self, sector: &str, percent: f64) -> Result<SectorOverview> {
         self.industry_engine.apply_industry_subsidy(sector, percent)
+    }
+
+    pub fn apply_industry_subsidy_by_id(
+        &mut self,
+        id: &SectorId,
+        percent: f64,
+    ) -> Result<SectorOverview> {
+        self.industry_engine
+            .apply_industry_subsidy_by_id(id, percent)
     }
 
     pub fn set_time_multiplier(&mut self, multiplier: f64) -> Result<()> {

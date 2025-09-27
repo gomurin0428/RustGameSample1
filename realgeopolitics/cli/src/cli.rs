@@ -140,11 +140,13 @@ fn dispatch_command(game: &mut GameState, input: &str) -> Result<()> {
                     let percent: f64 = percent_text
                         .parse()
                         .map_err(|_| anyhow!("補助金割合は数値で指定してください。"))?;
-                    let overview = game.apply_industry_subsidy(sector_token, percent)?;
+                    let sector_id = game.sector_registry().resolve(sector_token)?;
+                    let overview = game.apply_industry_subsidy_by_id(&sector_id, percent)?;
                     println!(
-                        "{} ({}) に補助金 {:.1}% を設定しました。直近コスト {:.1} / 生産量 {:.1}",
+                        "{} ({}:{}) に補助金 {:.1}% を設定しました。直近コスト {:.1} / 生産量 {:.1}",
                         overview.name,
-                        overview.id.category,
+                        sector_id.category,
+                        sector_id.key,
                         overview.subsidy_percent,
                         overview.last_cost,
                         overview.last_output

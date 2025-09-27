@@ -5,11 +5,10 @@ use anyhow::Result;
 
 use crate::game::country::CountryState;
 #[cfg(test)]
-use crate::game::economy::SectorId;
-#[cfg(test)]
 use crate::game::economy::industry::SectorMetrics;
+use crate::game::economy::industry::SectorRegistry;
 use crate::game::economy::{
-    ExpenseKind, IndustryRuntime, IndustryTickOutcome, RevenueKind, SectorOverview,
+    ExpenseKind, IndustryRuntime, IndustryTickOutcome, RevenueKind, SectorId, SectorOverview,
 };
 
 pub(crate) struct IndustryEngine {
@@ -25,9 +24,21 @@ impl IndustryEngine {
         self.runtime.overview()
     }
 
+    pub fn sector_registry(&self) -> &SectorRegistry {
+        self.runtime.registry()
+    }
+
     pub fn apply_industry_subsidy(&mut self, token: &str, percent: f64) -> Result<SectorOverview> {
-        let id = self.runtime.resolve_sector_token(token)?;
-        self.runtime.apply_subsidy(&id, percent)
+        let id = self.sector_registry().resolve(token)?;
+        self.apply_industry_subsidy_by_id(&id, percent)
+    }
+
+    pub fn apply_industry_subsidy_by_id(
+        &mut self,
+        id: &SectorId,
+        percent: f64,
+    ) -> Result<SectorOverview> {
+        self.runtime.apply_subsidy(id, percent)
     }
 
     pub fn simulate_tick(
@@ -195,6 +206,11 @@ mod tests {
             .apply_industry_subsidy("energy:electricity", 20.0)
             .expect("subsidy");
         assert_eq!(overview.id.category, IndustryCategory::Energy);
+
+        let follow_up = engine
+            .apply_industry_subsidy_by_id(&overview.id, 5.0)
+            .expect("subsidy by id");
+        assert_eq!(follow_up.id, overview.id);
     }
 
     #[test]
