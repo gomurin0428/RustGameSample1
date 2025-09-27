@@ -36,6 +36,25 @@ impl GameBuilder {
         Ok(GameState::new(bootstrap))
     }
 
+    /// Convert this `GameBuilder` into a fully initialized `GameBootstrap`.
+    ///
+    /// Performs validation of the builder's country definitions and assembles all bootstrap
+    /// components required to start a game (random number generator, scheduler with core
+    /// and scripted-event tasks, initialized countries and diplomatic relations, commodity
+    /// market, and industry engine).
+    ///
+    /// # Returns
+    ///
+    /// A `GameBootstrap` containing `rng`, `scheduler`, `countries`, `commodity_market`,
+    /// `scripted_events`, and `industry_engine` on success; an error if validation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let defs = crate::tests::sample_definitions();
+    /// let bootstrap = GameBuilder::new(defs).into_bootstrap().unwrap();
+    /// assert!(!bootstrap.countries.is_empty());
+    /// ```
     pub(crate) fn into_bootstrap(self) -> Result<GameBootstrap> {
         self.validate_definitions()?;
         let GameBuilder { definitions, rng } = self;
@@ -134,6 +153,25 @@ fn register_core_tasks(scheduler: &mut Scheduler) {
     );
 }
 
+/// Registers scripted-event tasks for each built-in scripted event and returns the configured engine.
+///
+/// For each scripted event provided by the built-in engine (created for `country_count`), a `ScriptedEvent`
+/// task is scheduled on `scheduler` using the engine's initial delay and its recurring check interval.
+/// Propagates any error encountered while constructing the `ScriptedEventEngine`.
+///
+/// # Returns
+///
+/// `ScriptedEventEngine` containing the scripted events that were scheduled.
+///
+/// # Examples
+///
+/// ```
+/// # use your_crate::{Scheduler, register_scripted_events};
+/// # fn make_scheduler() -> Scheduler { Scheduler::new() }
+/// let mut scheduler = make_scheduler();
+/// let engine = register_scripted_events(&mut scheduler, 3).expect("engine built");
+/// assert!(engine.len() > 0);
+/// ```
 fn register_scripted_events(
     scheduler: &mut Scheduler,
     country_count: usize,
@@ -150,6 +188,16 @@ fn register_scripted_events(
     Ok(engine)
 }
 
+/// Clamp a metric to the allowed metric range.
+///
+/// Returns the input value clamped to the inclusive range [MIN_METRIC, MAX_METRIC].
+///
+/// # Examples
+///
+/// ```
+/// let v = clamp_metric(7);
+/// assert_eq!(clamp_metric(v), v);
+/// ```
 fn clamp_metric(value: i32) -> i32 {
     value.clamp(MIN_METRIC, MAX_METRIC)
 }
