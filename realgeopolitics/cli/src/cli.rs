@@ -328,6 +328,7 @@ fn print_reports<W: Write>(writer: &mut W, minutes: f64, reports: &[String]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use realgeopolitics_core::CountryDefinition;
 
     #[test]
     fn print_reports_formats_industry_lines() {
@@ -350,5 +351,52 @@ mod tests {
         print_reports(&mut buffer, 30.0, &reports).expect("print success");
         let output = String::from_utf8(buffer).expect("utf8");
         assert_eq!("30.0 分経過: 変化は特にありません。\n", output);
+    }
+
+    fn sample_definitions() -> Vec<CountryDefinition> {
+        vec![
+            CountryDefinition {
+                name: "Asteria".into(),
+                government: "Republic".into(),
+                population_millions: 50.0,
+                gdp: 1_500.0,
+                stability: 60,
+                military: 55,
+                approval: 50,
+                budget: 400.0,
+                resources: 70,
+                tax_policy: None,
+            },
+            CountryDefinition {
+                name: "Borealis".into(),
+                government: "Federation".into(),
+                population_millions: 42.0,
+                gdp: 1_200.0,
+                stability: 58,
+                military: 52,
+                approval: 48,
+                budget: 360.0,
+                resources: 68,
+                tax_policy: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn industry_subsidize_command_updates_registry() {
+        let mut game = GameState::from_definitions(sample_definitions()).expect("game");
+        dispatch_command(&mut game, "industry subsidize energy:electricity 12.5")
+            .expect("dispatch industry subsidize");
+
+        let registry = game.sector_registry();
+        let energy = registry
+            .resolve("energy:electricity")
+            .expect("resolve sector");
+        let overview = game
+            .industry_overview()
+            .into_iter()
+            .find(|entry| entry.id == energy)
+            .expect("overview entry");
+        assert!((overview.subsidy_percent - 12.5).abs() < 1e-6);
     }
 }

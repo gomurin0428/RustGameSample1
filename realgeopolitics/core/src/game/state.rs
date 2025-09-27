@@ -660,6 +660,27 @@ mod tests {
     }
 
     #[test]
+    fn sector_registry_resolves_and_applies_via_game_state() {
+        let mut game = GameState::from_definitions_with_seed(sample_definitions(), 77).unwrap();
+        let registry = game.sector_registry();
+        let energy = registry
+            .resolve("energy:electricity")
+            .expect("resolve energy:electricity");
+
+        let overview = game
+            .apply_industry_subsidy_by_id(&energy, 15.0)
+            .expect("apply subsidy by id");
+        assert_eq!(overview.id, energy);
+        assert!((overview.subsidy_percent - 15.0).abs() < 1e-6);
+
+        let slide = game
+            .apply_industry_subsidy("energy:electricity", 5.0)
+            .expect("apply subsidy by token");
+        assert_eq!(slide.id, energy);
+        assert!((slide.subsidy_percent - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn time_multiplier_scales_tick_minutes() {
         let mut game = GameState::from_definitions_with_seed(sample_definitions(), 7).unwrap();
         game.set_time_multiplier(2.0).unwrap();
