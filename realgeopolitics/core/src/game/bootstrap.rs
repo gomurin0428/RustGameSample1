@@ -5,7 +5,7 @@ use super::{
     BASE_TICK_MINUTES, MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES, MINUTES_PER_DAY,
     country::{BudgetAllocation, CountryDefinition, CountryState},
     economy::{CreditRating, FiscalAccount, IndustryCatalog, IndustryRuntime, TaxPolicy},
-    event_templates::{ScriptedEventState, load_event_templates},
+    event_templates::ScriptedEventEngine,
     industry::IndustryEngine,
     market::CommodityMarket,
     state::GameState,
@@ -36,6 +36,25 @@ impl GameBuilder {
         Ok(GameState::new(bootstrap))
     }
 
+    /// Convert this `GameBuilder` into a fully initialized `GameBootstrap`.
+    ///
+    /// Performs validation of the builder's country definitions and assembles all bootstrap
+    /// components required to start a game (random number generator, scheduler with core
+    /// and scripted-event tasks, initialized countries and diplomatic relations, commodity
+    /// market, and industry engine).
+    ///
+    /// # Returns
+    ///
+    /// A `GameBootstrap` containing `rng`, `scheduler`, `countries`, `commodity_market`,
+    /// `scripted_events`, and `industry_engine` on success; an error if validation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let defs = crate::tests::sample_definitions();
+    /// let bootstrap = GameBuilder::new(defs).into_bootstrap().unwrap();
+    /// assert!(!bootstrap.countries.is_empty());
+    /// ```
     pub(crate) fn into_bootstrap(self) -> Result<GameBootstrap> {
         self.validate_definitions()?;
         let GameBuilder { definitions, rng } = self;
@@ -45,7 +64,7 @@ impl GameBuilder {
 
         let mut scheduler = Scheduler::new();
         register_core_tasks(&mut scheduler);
-        let event_templates = register_scripted_events(&mut scheduler, countries.len())?;
+        let scripted_events = register_scripted_events(&mut scheduler, countries.len())?;
 
         let commodity_market = CommodityMarket::new(120.0, 7.5, 0.04);
         let industry_catalog = IndustryCatalog::from_embedded().unwrap_or_default();
@@ -57,7 +76,7 @@ impl GameBuilder {
             scheduler,
             countries,
             commodity_market,
-            event_templates,
+            scripted_events,
             industry_engine,
         })
     }
@@ -76,7 +95,7 @@ pub(crate) struct GameBootstrap {
     pub(crate) scheduler: Scheduler,
     pub(crate) countries: Vec<CountryState>,
     pub(crate) commodity_market: CommodityMarket,
-    pub(crate) event_templates: Vec<ScriptedEventState>,
+    pub(crate) scripted_events: ScriptedEventEngine,
     pub(crate) industry_engine: IndustryEngine,
 }
 
@@ -134,22 +153,51 @@ fn register_core_tasks(scheduler: &mut Scheduler) {
     );
 }
 
+/// Registers scripted-event tasks for each built-in scripted event and returns the configured engine.
+///
+/// For each scripted event provided by the built-in engine (created for `country_count`), a `ScriptedEvent`
+/// task is scheduled on `scheduler` using the engine's initial delay and its recurring check interval.
+/// Propagates any error encountered while constructing the `ScriptedEventEngine`.
+///
+/// # Returns
+///
+/// `ScriptedEventEngine` containing the scripted events that were scheduled.
+///
+/// # Examples
+///
+/// ```
+/// # use your_crate::{Scheduler, register_scripted_events};
+/// # fn make_scheduler() -> Scheduler { Scheduler::new() }
+/// let mut scheduler = make_scheduler();
+/// let engine = register_scripted_events(&mut scheduler, 3).expect("engine built");
+/// assert!(engine.len() > 0);
+/// ```
 fn register_scripted_events(
     scheduler: &mut Scheduler,
     country_count: usize,
-) -> Result<Vec<ScriptedEventState>> {
-    let event_templates = load_event_templates(country_count)?;
-    for (idx, template) in event_templates.iter().enumerate() {
+) -> Result<ScriptedEventEngine> {
+    let engine = ScriptedEventEngine::from_builtin(country_count)?;
+    for idx in 0..engine.len() {
         let mut task = ScheduledTask::new(
             TaskKind::ScriptedEvent(idx),
-            template.initial_delay_minutes(),
+            engine.initial_delay_minutes(idx),
         );
-        task = task.with_schedule(ScheduleSpec::EveryMinutes(template.check_minutes()));
+        task = task.with_schedule(ScheduleSpec::EveryMinutes(engine.check_minutes(idx)));
         scheduler.schedule(task);
     }
-    Ok(event_templates)
+    Ok(engine)
 }
 
+/// Clamp a metric to the allowed metric range.
+///
+/// Returns the input value clamped to the inclusive range [MIN_METRIC, MAX_METRIC].
+///
+/// # Examples
+///
+/// ```
+/// let v = clamp_metric(7);
+/// assert_eq!(clamp_metric(v), v);
+/// ```
 fn clamp_metric(value: i32) -> i32 {
     value.clamp(MIN_METRIC, MAX_METRIC)
 }
@@ -211,14 +259,14 @@ mod tests {
         let GameBootstrap {
             mut scheduler,
             countries,
-            event_templates,
+            scripted_events,
             commodity_market,
             industry_engine,
             ..
         } = bootstrap;
 
         assert_eq!(countries.len(), 2);
-        assert!(!event_templates.is_empty());
+        assert!(scripted_events.len() > 0);
         assert!(industry_engine.overview().len() > 0);
         assert!(commodity_market.price() > 0.0);
         assert!(scheduler.peek_next_minutes(0).is_some());
