@@ -22,6 +22,7 @@
 - 産業シミュレーションは `game::industry::IndustryEngine` を経由します。`IndustryRuntime` を直接操作すると国への収益配分が二重計上になるため、tick 実行は `IndustryEngine::simulate_tick`、補助金変更は `IndustryEngine::apply_industry_subsidy` を利用し、テストで修正を加える場合も `set_modifier_for_test` を通してください。
 - `SectorMetricsStore` をテストやユーティリティから直接更新する場合は、tick 開始前に必ず `begin_tick()` を呼び出してください。前回値をクリアしないまま `record()` すると合計値が累積され、`IndustryEngine::overview()` の出力や依存評価が破壊されます。レポート文を拡張したい場合も `Reporter::record_sector_activity()` を経由し、`IndustryRuntime` 内で独自フォーマットを複製しないでください。
 - CLI 版で `set` コマンドを使う場合は、インフラ/軍事/福祉/外交/債務返済/行政維持/研究開発の順で GDP 比率 (％) を 7 つ入力し、必要に応じて末尾に `core` または `nocore` を付けてください。合計値に上限制約はありませんが、旧仕様（割合正規化）向けのスクリプトを使い続けると引数不足で失敗するため移行時は確認してください。Web 版も NumericUpDown で同じ割合を扱い、自動正規化は行われません。
+- CLI モジュールに `mod foo;` を追加する際はファイルを `cli/src/cli/foo.rs` または `cli/src/cli/foo/mod.rs` に配置してください。`cli/src/foo.rs` 側に置くと `E0583` (file not found for module) が発生し、ビルドが止まります。
 - Web 版の時間倍率セレクタは内部的に小数点第2位で丸めた値を表示します。CLI 側で 1.333 など細かい倍率を設定した直後は「カスタム」項目が追加されて 1.33 として選択されるので、厳密な値を維持したい場合は CLI から再調整してください。
 - FiscalAccount の収支は tick ごとにクリアされます。テストや CLI で直前 tick の収支を確認したい場合は `tick` 実行直後に `total_revenue()` / `total_expense()` を参照してください。複数 tick の履歴が必要なら別途蓄積してください。
 - `FiscalSnapshot` の履歴は `GameState::tick_minutes` および `TaskKind::EconomicTick` 経由でのみ更新されます。テストで `CountryState` を直接操作した直後に履歴を比較する場合は、必ず `tick_minutes` か `ScheduledTask::execute` を実行して履歴を更新してください。履歴が空のまま UI を描画すると `panic!` で異常終了するため、ダミーデータを手で挿入するよりゲームロジック経由で更新する方が安全です。
