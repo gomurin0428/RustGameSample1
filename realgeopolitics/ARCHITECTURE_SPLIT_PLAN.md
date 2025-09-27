@@ -74,7 +74,7 @@ _2025-09-27 更新_: 項目 4 を実装し、SectorRegistry でセクター解�
 - イベント ID 解決や説明文アクセスなど UI 用の API が `GameState` から `ScriptedEventState` への直接参照になっており、非公開データを露出させがち。
 
 **分割方針案**
-1. `event_templates/loader.rs` を新設し、IO とデシリアライズを担当させる。`CompiledEventTemplate` 生成は `compiler.rs` に分離。
+1. （完了 2025-09-27）`event_templates/loader.rs` を新設し、IO とデシリアライズを担当させる。`CompiledEventTemplate` 生成は `compiler.rs` に分離。
 2. 条件式パーサは `condition/` ディレクトリに切り出し、小さなトレイト (`ConditionEvaluator`) を導入してユニットテストを個別化。
 3. 実行時状態 (`ScriptedEventInstance`) とテンプレート (`CompiledEventTemplate`) を分け、`GameState` からはインターフェース (`ScriptedEventEngine`) のみ参照する。
 4. レポート文言生成をフォーマッタに委譲し、イベント効果適用自体はピュアなロジックとしてテスト可能にする。

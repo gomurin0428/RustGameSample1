@@ -1,45 +1,15 @@
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
-use super::country::CountryState;
-use super::economy::CreditRating;
-use super::{MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES};
+use crate::game::country::CountryState;
+use crate::game::economy::CreditRating;
+use crate::game::{MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES};
 
-const BUILTIN_TEMPLATES: &[TemplateSource] = &[
-    TemplateSource::Yaml(
-        "debt_crisis.yaml",
-        include_str!("../../../config/events/debt_crisis.yaml"),
-    ),
-    TemplateSource::Json(
-        "resource_boom.json",
-        include_str!("../../../config/events/resource_boom.json"),
-    ),
-];
-
-pub(crate) fn load_event_templates(country_count: usize) -> Result<Vec<ScriptedEventState>> {
-    BUILTIN_TEMPLATES
-        .iter()
-        .enumerate()
-        .map(|(idx, source)| compile_template(idx, source, country_count))
-        .collect()
-}
-#[derive(Debug, Clone, Copy)]
-enum TemplateSource {
-    Yaml(&'static str, &'static str),
-    Json(&'static str, &'static str),
-}
-
-fn compile_template(
+pub(super) fn compile_template(
     source_index: usize,
-    source: &TemplateSource,
+    raw: EventTemplateRaw,
     country_count: usize,
 ) -> Result<ScriptedEventState> {
-    let raw: EventTemplateRaw = match source {
-        TemplateSource::Yaml(name, body) => serde_yaml::from_str(body)
-            .map_err(|err| anyhow!("YAML テンプレート {} の解析に失敗しました: {}", name, err))?,
-        TemplateSource::Json(name, body) => serde_json::from_str(body)
-            .map_err(|err| anyhow!("JSON テンプレート {} の解析に失敗しました: {}", name, err))?,
-    };
     let compiled = CompiledEventTemplate::new(raw).map_err(|err| {
         anyhow!(
             "イベントテンプレート {} のコンパイルに失敗しました: {}",
@@ -49,8 +19,9 @@ fn compile_template(
     })?;
     Ok(ScriptedEventState::new(compiled, country_count))
 }
+
 #[derive(Debug, Deserialize)]
-struct EventTemplateRaw {
+pub(super) struct EventTemplateRaw {
     id: String,
     name: String,
     description: String,
@@ -65,6 +36,15 @@ struct EventTemplateRaw {
     effects: Vec<EventEffectRaw>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub(super) enum EventEffectRaw {
+    #[serde(rename = "adjust_metric")]
+    AdjustMetric { metric: String, delta: f64 },
+    #[serde(rename = "report")]
+    Report { message: String },
+}
+
 impl EventTemplateRaw {
     const fn default_check_minutes() -> u64 {
         120
@@ -73,14 +53,6 @@ impl EventTemplateRaw {
     const fn default_cooldown_minutes() -> u64 {
         720
     }
-}
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-enum EventEffectRaw {
-    #[serde(rename = "adjust_metric")]
-    AdjustMetric { metric: String, delta: f64 },
-    #[serde(rename = "report")]
-    Report { message: String },
 }
 #[derive(Debug)]
 struct CompiledEventTemplate {
@@ -684,5 +656,78 @@ impl TokenKind {
             (TokenKind::RParen, Token::RParen) => true,
             _ => false,
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::country::{BudgetAllocation, CountryState};
+    use crate::game::economy::CreditRating;
+    use crate::game::economy::{FiscalAccount, TaxPolicy};
+
+    fn sample_country() -> CountryState {
+        CountryState::new(
+            "Testland".to_string(),
+            "Republic".to_string(),
+            10.0,
+            500.0,
+            50,
+            40,
+            45,
+            60,
+            FiscalAccount::new(200.0, CreditRating::A),
+            TaxPolicy::default(),
+            BudgetAllocation::default(),
+        )
+    }
+
+    #[test]
+    fn compile_template_rejects_zero_check_minutes() {
+        let raw = EventTemplateRaw {
+            id: "invalid".to_string(),
+            name: "Invalid".to_string(),
+            description: "desc".to_string(),
+            condition: "approval > 0".to_string(),
+            check_minutes: 0,
+            initial_delay_minutes: 0,
+            cooldown_minutes: 60,
+            effects: Vec::new(),
+        };
+        let err = compile_template(3, raw, 1).expect_err("check_minutes == 0 should be rejected");
+        assert!(err.to_string().contains("check_minutes"));
+    }
+
+    #[test]
+    fn scripted_event_state_applies_effects_and_cooldown() {
+        let raw = EventTemplateRaw {
+            id: "approval_push".to_string(),
+            name: "Approval Push".to_string(),
+            description: "desc".to_string(),
+            condition: "approval >= 40".to_string(),
+            check_minutes: 60,
+            initial_delay_minutes: 5,
+            cooldown_minutes: 120,
+            effects: vec![
+                EventEffectRaw::AdjustMetric {
+                    metric: "approval".to_string(),
+                    delta: 10.0,
+                },
+                EventEffectRaw::Report {
+                    message: "{country} improved approval".to_string(),
+                },
+            ],
+        };
+        let mut state = compile_template(0, raw, 1).expect("valid template should compile");
+        assert_eq!(state.check_minutes(), 60);
+
+        let mut countries = vec![sample_country()];
+        let reports = state.execute(&mut countries, 300.0);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0], "Testland improved approval");
+        assert_eq!(countries[0].approval, 55);
+
+        let reports_second = state.execute(&mut countries, 360.0);
+        assert!(reports_second.is_empty());
+        assert_eq!(countries[0].approval, 55);
     }
 }
