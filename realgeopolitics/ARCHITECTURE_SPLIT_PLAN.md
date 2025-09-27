@@ -28,7 +28,7 @@
 3. 財政・外交・政策処理の呼び出しを統括する `SystemsFacade` (軽量ストラテジ) を設置し、`GameState` からは「シナリオ進行の指示」と「レポート収集」だけを扱う。
 4. 産業関連 (`industry_runtime` 運用と収益配分) を `IndustryEngine` に移し、国への収益配分ロジックを専用メソッドへ隔離する。
 
-**移行ステップ案**
+\n\n_2025-09-27 更新_: 項目 3 を実装し、SectorMetricsStore にメトリクスを集約、Reporter にレポート生成を委譲済み。IndustryRuntime::simulate_tick はストア経由で最新値を保持し、IndustryEngine::overview は HashMap の直接参照を避ける構成になった。**移行ステップ案**
 - 先に `GameState::from_definitions_*` の戻り値を `GameBuilder` に置き換える形でリファクタリングを開始し、挙動比較テストを追加。
 - `tick_minutes` の内部ロジックを、時間更新 → 財政準備 → システム呼び出し → レポート合成 の 4 ブロックに整理してから、それぞれを専用型に抽出。
 - CLI/Web の利用側は `GameState` の公開 API を維持しつつ内部委譲に切り替えるため、機能単位の統合テストを先に用意しておく。

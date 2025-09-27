@@ -2,18 +2,18 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 
-use super::effects;
 use super::model::{
     IndustryCatalog, IndustryCategory, IndustryTickOutcome, SectorId, SectorMetrics,
     SectorModifier, SectorOverview, SectorState,
 };
+use super::{Reporter, SectorMetricsStore, effects};
 
 #[derive(Debug, Clone)]
 pub struct IndustryRuntime {
     catalog: IndustryCatalog,
     states: HashMap<SectorId, SectorState>,
     modifiers: HashMap<SectorId, SectorModifier>,
-    last_metrics: HashMap<SectorId, SectorMetrics>,
+    metrics_store: SectorMetricsStore,
     energy_baseline_output: f64,
     energy_cost_index: f64,
 }
@@ -32,7 +32,7 @@ impl IndustryRuntime {
             catalog,
             states,
             modifiers: HashMap::new(),
-            last_metrics: HashMap::new(),
+            metrics_store: SectorMetricsStore::new(),
             energy_baseline_output: energy_baseline.max(1.0),
             energy_cost_index: 1.0,
         }
@@ -43,7 +43,9 @@ impl IndustryRuntime {
             return IndustryTickOutcome::default();
         }
 
-        let mut outcome = IndustryTickOutcome::default();
+        self.metrics_store.begin_tick();
+        let mut reporter = Reporter::new();
+
         const ORDER: [IndustryCategory; 4] = [
             IndustryCategory::Energy,
             IndustryCategory::Primary,
@@ -65,7 +67,7 @@ impl IndustryRuntime {
                 let impact = effects::evaluate_dependency_impacts(
                     category,
                     def,
-                    &outcome.sector_metrics,
+                    self.metrics_store.metrics(),
                     &self.states,
                 );
                 let state_entry = self
@@ -127,7 +129,6 @@ impl IndustryRuntime {
                     (def.base_cost * cost_factor * (1.0 - subsidy).max(0.1)).clamp(0.05, 5_000.0);
                 let cost = production * unit_cost;
                 let revenue = sales * price;
-                let gdp_contrib = revenue - cost;
 
                 state_entry.inventory = new_inventory;
                 state_entry.unmet_demand = new_unmet;
@@ -164,19 +165,15 @@ impl IndustryRuntime {
                     inventory: new_inventory,
                     unmet_demand: new_unmet,
                 };
-                outcome.total_revenue += revenue;
-                outcome.total_cost += cost;
-                outcome.total_gdp += gdp_contrib;
-                outcome
-                    .sector_metrics
-                    .insert(sector_id.clone(), metrics.clone());
-
-                if production > f64::EPSILON || sales > f64::EPSILON {
-                    outcome.reports.push(format!(
-                        "{}: 生産 {:.1} / 需要 {:.1} / 在庫 {:.1} / 未充足 {:.1}",
-                        def.name, production, demand_with_backlog, new_inventory, new_unmet
-                    ));
-                }
+                self.metrics_store.record(sector_id.clone(), metrics);
+                reporter.record_sector_activity(
+                    &def.name,
+                    production,
+                    demand_with_backlog,
+                    new_inventory,
+                    new_unmet,
+                    sales,
+                );
             }
 
             if category == IndustryCategory::Energy {
@@ -186,8 +183,15 @@ impl IndustryRuntime {
                 );
             }
         }
-        self.last_metrics = outcome.sector_metrics.clone();
-        outcome
+
+        let totals = self.metrics_store.totals();
+        IndustryTickOutcome {
+            total_revenue: totals.revenue(),
+            total_cost: totals.cost(),
+            total_gdp: totals.gdp(),
+            sector_metrics: self.metrics_store.snapshot(),
+            reports: reporter.into_reports(),
+        }
     }
 
     pub fn resolve_sector_token(&self, token: &str) -> Result<SectorId> {
@@ -209,7 +213,7 @@ impl IndustryRuntime {
         let mut entries = Vec::new();
         for (id, def) in self.catalog.sectors() {
             let state = self.states.get(id);
-            let metrics = self.last_metrics.get(id);
+            let metrics = self.metrics_store.get(id);
             entries.push(SectorOverview {
                 id: id.clone(),
                 name: def.name.clone(),
@@ -234,7 +238,7 @@ impl IndustryRuntime {
             .get(id)
             .ok_or_else(|| anyhow!("セクターが存在しません: {}: {}", id.category, id.key))?;
         let state = self.states.get(id);
-        let metrics = self.last_metrics.get(id);
+        let metrics = self.metrics_store.get(id);
         Ok(SectorOverview {
             id: id.clone(),
             name: def.name.clone(),
@@ -247,7 +251,7 @@ impl IndustryRuntime {
     }
 
     pub fn metrics(&self) -> &HashMap<SectorId, SectorMetrics> {
-        &self.last_metrics
+        self.metrics_store.metrics()
     }
 
     pub fn energy_cost_index(&self) -> f64 {
