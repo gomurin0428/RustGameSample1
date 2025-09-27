@@ -11,16 +11,14 @@ use super::condition::{ConditionEvaluator, parse_condition};
 pub(super) fn compile_template(
     source_index: usize,
     raw: EventTemplateRaw,
-    country_count: usize,
-) -> Result<ScriptedEventState> {
-    let compiled = CompiledEventTemplate::new(raw).map_err(|err| {
+) -> Result<CompiledEventTemplate> {
+    CompiledEventTemplate::new(raw).map_err(|err| {
         anyhow!(
             "イベントテンプレート {} のコンパイルに失敗しました: {}",
             source_index,
             err
         )
-    })?;
-    Ok(ScriptedEventState::new(compiled, country_count))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,7 +55,7 @@ impl EventTemplateRaw {
         720
     }
 }
-struct CompiledEventTemplate {
+pub(super) struct CompiledEventTemplate {
     id: String,
     name: String,
     description: String,
@@ -103,68 +101,46 @@ impl CompiledEventTemplate {
             effects,
         })
     }
-}
-#[derive(Debug)]
-pub(crate) struct ScriptedEventState {
-    template: CompiledEventTemplate,
-    last_triggered: Vec<Option<f64>>,
-}
 
-impl ScriptedEventState {
-    fn new(template: CompiledEventTemplate, country_count: usize) -> Self {
-        Self {
-            template,
-            last_triggered: vec![None; country_count],
-        }
+    pub(super) fn id(&self) -> &str {
+        &self.id
     }
 
-    pub(crate) fn check_minutes(&self) -> u64 {
-        self.template.check_minutes
+    pub(super) fn name(&self) -> &str {
+        &self.name
     }
 
-    pub(crate) fn initial_delay_minutes(&self) -> u64 {
-        self.template.initial_delay_minutes
+    pub(super) fn description(&self) -> &str {
+        &self.description
     }
 
-    pub(crate) fn id(&self) -> &str {
-        &self.template.id
+    pub(super) fn check_minutes(&self) -> u64 {
+        self.check_minutes
     }
 
-    pub(crate) fn name(&self) -> &str {
-        &self.template.name
+    pub(super) fn initial_delay_minutes(&self) -> u64 {
+        self.initial_delay_minutes
     }
 
-    pub(crate) fn description(&self) -> &str {
-        &self.template.description
-    }
-
-    fn ensure_capacity(&mut self, country_count: usize) {
-        if self.last_triggered.len() < country_count {
-            self.last_triggered.resize(country_count, None);
-        }
-    }
-
-    pub(crate) fn execute(
-        &mut self,
-        countries: &mut [CountryState],
+    pub(super) fn can_trigger(
+        &self,
+        country: &CountryState,
+        last_triggered_at: Option<f64>,
         current_minutes: f64,
-    ) -> Vec<String> {
-        self.ensure_capacity(countries.len());
-        let mut reports = Vec::new();
-        for (idx, country) in countries.iter_mut().enumerate() {
-            if !self.template.condition.evaluate(country) {
-                continue;
-            }
-            if let Some(last) = self.last_triggered[idx] {
-                if current_minutes - last < self.template.cooldown_minutes {
-                    continue;
-                }
-            }
-            let mut local_reports = self.template.apply_effects(country);
-            reports.append(&mut local_reports);
-            self.last_triggered[idx] = Some(current_minutes);
+    ) -> bool {
+        if !self.condition_matches(country) {
+            return false;
         }
-        reports
+        if let Some(last) = last_triggered_at {
+            if current_minutes - last < self.cooldown_minutes {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn condition_matches(&self, country: &CountryState) -> bool {
+        self.condition.evaluate(country)
     }
 }
 #[derive(Debug, Clone)]
@@ -249,7 +225,7 @@ fn clamp_resource_delta(base: i32, delta: f64) -> i32 {
     candidate.clamp(MIN_RESOURCES, MAX_RESOURCES)
 }
 impl CompiledEventTemplate {
-    fn apply_effects(&self, country: &mut CountryState) -> Vec<String> {
+    pub(super) fn apply_effects(&self, country: &mut CountryState) -> Vec<String> {
         let mut reports = Vec::new();
         for effect in &self.effects {
             match effect {
@@ -302,12 +278,12 @@ mod tests {
             cooldown_minutes: 60,
             effects: Vec::new(),
         };
-        let err = compile_template(3, raw, 1).expect_err("check_minutes == 0 should be rejected");
+        let err = compile_template(3, raw).expect_err("check_minutes == 0 should be rejected");
         assert!(err.to_string().contains("check_minutes"));
     }
 
     #[test]
-    fn scripted_event_state_applies_effects_and_cooldown() {
+    fn compiled_template_exposes_metadata_and_effects() {
         let raw = EventTemplateRaw {
             id: "approval_push".to_string(),
             name: "Approval Push".to_string(),
@@ -326,17 +302,21 @@ mod tests {
                 },
             ],
         };
-        let mut state = compile_template(0, raw, 1).expect("valid template should compile");
-        assert_eq!(state.check_minutes(), 60);
+        let template = compile_template(0, raw).expect("valid template should compile");
+        assert_eq!(template.check_minutes(), 60);
+        assert_eq!(template.initial_delay_minutes(), 5);
+        assert_eq!(template.id(), "approval_push");
 
-        let mut countries = vec![sample_country()];
-        let reports = state.execute(&mut countries, 300.0);
+        let mut country = sample_country();
+        assert!(template.can_trigger(&country, None, 300.0));
+        let reports = template.apply_effects(&mut country);
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0], "Testland improved approval");
-        assert_eq!(countries[0].approval, 55);
+        assert_eq!(country.approval, 55);
 
-        let reports_second = state.execute(&mut countries, 360.0);
-        assert!(reports_second.is_empty());
-        assert_eq!(countries[0].approval, 55);
+        assert!(
+            !template.can_trigger(&country, Some(300.0), 360.0),
+            "cooldown should prevent immediate re-trigger"
+        );
     }
 }

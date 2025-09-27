@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 
-use super::compiler::{EventTemplateRaw, ScriptedEventState, compile_template};
+use super::compiler::{CompiledEventTemplate, EventTemplateRaw, compile_template};
 
 const BUILTIN_TEMPLATES: &[TemplateSource] = &[
     TemplateSource::Yaml(
@@ -19,28 +19,21 @@ enum TemplateSource {
     Json(&'static str, &'static str),
 }
 
-pub(crate) fn load_event_templates(country_count: usize) -> Result<Vec<ScriptedEventState>> {
-    load_from_sources(BUILTIN_TEMPLATES, country_count)
+pub(crate) fn load_event_templates() -> Result<Vec<CompiledEventTemplate>> {
+    load_from_sources(BUILTIN_TEMPLATES)
 }
 
-fn load_from_sources(
-    sources: &[TemplateSource],
-    country_count: usize,
-) -> Result<Vec<ScriptedEventState>> {
+fn load_from_sources(sources: &[TemplateSource]) -> Result<Vec<CompiledEventTemplate>> {
     sources
         .iter()
         .enumerate()
-        .map(|(idx, source)| parse_and_compile(idx, source, country_count))
+        .map(|(idx, source)| parse_and_compile(idx, source))
         .collect()
 }
 
-fn parse_and_compile(
-    index: usize,
-    source: &TemplateSource,
-    country_count: usize,
-) -> Result<ScriptedEventState> {
+fn parse_and_compile(index: usize, source: &TemplateSource) -> Result<CompiledEventTemplate> {
     let raw = parse_template(source)?;
-    compile_template(index, raw, country_count)
+    compile_template(index, raw)
 }
 
 fn parse_template(source: &TemplateSource) -> Result<EventTemplateRaw> {
@@ -58,7 +51,7 @@ mod tests {
 
     #[test]
     fn load_builtin_templates_success() {
-        let templates = load_event_templates(4).expect("built-in templates should load");
+        let templates = load_event_templates().expect("built-in templates should load");
         assert_eq!(templates.len(), 2);
         assert_eq!(templates[0].id(), "debt_crisis");
         assert_eq!(templates[0].check_minutes(), 180);
@@ -69,7 +62,7 @@ mod tests {
     #[test]
     fn load_from_sources_reports_parse_errors() {
         let sources = [TemplateSource::Yaml("broken.yaml", "id: [unterminated")];
-        let err = load_from_sources(&sources, 1).expect_err("should propagate parse failures");
+        let err = load_from_sources(&sources).expect_err("should propagate parse failures");
         let message = format!("{}", err);
         assert!(message.contains("解析に失敗しました"));
     }
@@ -87,7 +80,7 @@ mod tests {
                 "effects": []
             }"#,
         )];
-        let err = load_from_sources(&sources, 1).expect_err("should propagate compile failures");
+        let err = load_from_sources(&sources).expect_err("should propagate compile failures");
         let message = format!("{}", err);
         assert!(message.contains("check_minutes"));
     }

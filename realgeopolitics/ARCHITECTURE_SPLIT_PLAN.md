@@ -79,6 +79,8 @@ _2025-09-27 更新_: 項目 4 を実装し、SectorRegistry でセクター解�
 3. 実行時状態 (`ScriptedEventInstance`) とテンプレート (`CompiledEventTemplate`) を分け、`GameState` からはインターフェース (`ScriptedEventEngine`) のみ参照する。
 4. レポート文言生成をフォーマッタに委譲し、イベント効果適用自体はピュアなロジックとしてテスト可能にする。
 
+_2025-09-27 更新_: 項目 3 を実装し、`ScriptedEventEngine` がテンプレートとインスタンスを統括する構造へ移行。GameState/Bootstrap はエンジン経由でスケジュールと発火を委譲し、クールダウン判定と国数増加時の拡張をテストで検証済み。
+
 **移行ステップ案**
 - 現行の `load_event_templates` を `ScriptedEventEngine::from_builtin()` に置き換える薄いアダプタを先に用意し、既存呼び出しを移行。
 - 条件式評価をモジュール化する際に、既存の `GameState::process_scripted_event` のユニットテストをベースラインとして確保する。

@@ -7,7 +7,7 @@ use super::{
     bootstrap::{GameBootstrap, GameBuilder},
     country::{BudgetAllocation, CountryDefinition, CountryState},
     economy::{FiscalSnapshot, SectorId, SectorOverview},
-    event_templates::ScriptedEventState,
+    event_templates::ScriptedEventEngine,
     industry::IndustryEngine,
     market::CommodityMarket,
     systems::facade::SystemsFacade,
@@ -21,7 +21,7 @@ pub struct GameState {
     rng: StdRng,
     countries: Vec<CountryState>,
     commodity_market: CommodityMarket,
-    event_templates: Vec<ScriptedEventState>,
+    scripted_events: ScriptedEventEngine,
     industry_engine: IndustryEngine,
     systems: SystemsFacade,
 }
@@ -62,7 +62,7 @@ impl GameState {
             rng: bootstrap.rng,
             countries: bootstrap.countries,
             commodity_market: bootstrap.commodity_market,
-            event_templates: bootstrap.event_templates,
+            scripted_events: bootstrap.scripted_events,
             industry_engine: bootstrap.industry_engine,
             systems: SystemsFacade::new(),
         };
@@ -153,18 +153,11 @@ impl GameState {
     }
 
     pub fn scripted_event_index(&self, id: &str) -> Option<usize> {
-        let needle = id.to_ascii_lowercase();
-        self.event_templates.iter().position(|template| {
-            let id_match = template.id().to_ascii_lowercase() == needle;
-            let name_match = template.name().to_ascii_lowercase() == needle;
-            id_match || name_match
-        })
+        self.scripted_events.find_index(id)
     }
 
     pub fn scripted_event_description(&self, id: &str) -> Option<&str> {
-        self.scripted_event_index(id)
-            .and_then(|idx| self.event_templates.get(idx))
-            .map(|template| template.description())
+        self.scripted_events.description_of(id)
     }
 
     #[cfg(test)]
@@ -283,11 +276,8 @@ impl GameState {
 
     pub(crate) fn process_scripted_event(&mut self, template_idx: usize) -> Vec<String> {
         let minutes = self.simulation_clock.simulation_minutes();
-        let template = self
-            .event_templates
-            .get_mut(template_idx)
-            .unwrap_or_else(|| panic!("無効なイベントテンプレートインデックス: {}", template_idx));
-        template.execute(&mut self.countries, minutes)
+        self.scripted_events
+            .execute(template_idx, &mut self.countries, minutes)
     }
 
     fn capture_fiscal_history(&mut self) {

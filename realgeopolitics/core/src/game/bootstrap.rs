@@ -5,7 +5,7 @@ use super::{
     BASE_TICK_MINUTES, MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES, MINUTES_PER_DAY,
     country::{BudgetAllocation, CountryDefinition, CountryState},
     economy::{CreditRating, FiscalAccount, IndustryCatalog, IndustryRuntime, TaxPolicy},
-    event_templates::{ScriptedEventState, load_event_templates},
+    event_templates::ScriptedEventEngine,
     industry::IndustryEngine,
     market::CommodityMarket,
     state::GameState,
@@ -45,7 +45,7 @@ impl GameBuilder {
 
         let mut scheduler = Scheduler::new();
         register_core_tasks(&mut scheduler);
-        let event_templates = register_scripted_events(&mut scheduler, countries.len())?;
+        let scripted_events = register_scripted_events(&mut scheduler, countries.len())?;
 
         let commodity_market = CommodityMarket::new(120.0, 7.5, 0.04);
         let industry_catalog = IndustryCatalog::from_embedded().unwrap_or_default();
@@ -57,7 +57,7 @@ impl GameBuilder {
             scheduler,
             countries,
             commodity_market,
-            event_templates,
+            scripted_events,
             industry_engine,
         })
     }
@@ -76,7 +76,7 @@ pub(crate) struct GameBootstrap {
     pub(crate) scheduler: Scheduler,
     pub(crate) countries: Vec<CountryState>,
     pub(crate) commodity_market: CommodityMarket,
-    pub(crate) event_templates: Vec<ScriptedEventState>,
+    pub(crate) scripted_events: ScriptedEventEngine,
     pub(crate) industry_engine: IndustryEngine,
 }
 
@@ -137,17 +137,17 @@ fn register_core_tasks(scheduler: &mut Scheduler) {
 fn register_scripted_events(
     scheduler: &mut Scheduler,
     country_count: usize,
-) -> Result<Vec<ScriptedEventState>> {
-    let event_templates = load_event_templates(country_count)?;
-    for (idx, template) in event_templates.iter().enumerate() {
+) -> Result<ScriptedEventEngine> {
+    let engine = ScriptedEventEngine::from_builtin(country_count)?;
+    for idx in 0..engine.len() {
         let mut task = ScheduledTask::new(
             TaskKind::ScriptedEvent(idx),
-            template.initial_delay_minutes(),
+            engine.initial_delay_minutes(idx),
         );
-        task = task.with_schedule(ScheduleSpec::EveryMinutes(template.check_minutes()));
+        task = task.with_schedule(ScheduleSpec::EveryMinutes(engine.check_minutes(idx)));
         scheduler.schedule(task);
     }
-    Ok(event_templates)
+    Ok(engine)
 }
 
 fn clamp_metric(value: i32) -> i32 {
@@ -211,14 +211,14 @@ mod tests {
         let GameBootstrap {
             mut scheduler,
             countries,
-            event_templates,
+            scripted_events,
             commodity_market,
             industry_engine,
             ..
         } = bootstrap;
 
         assert_eq!(countries.len(), 2);
-        assert!(!event_templates.is_empty());
+        assert!(scripted_events.len() > 0);
         assert!(industry_engine.overview().len() > 0);
         assert!(commodity_market.price() > 0.0);
         assert!(scheduler.peek_next_minutes(0).is_some());
