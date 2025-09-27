@@ -1,11 +1,15 @@
+mod commands;
+
 use std::io::{self, BufRead, Write};
 
-use anyhow::{Context, Result, anyhow, bail, ensure};
-use realgeopolitics_core::{BudgetAllocation, GameState};
+use anyhow::{Context, Result, anyhow, ensure};
+use commands::{CommandRegistry, Context as CommandContext};
+use realgeopolitics_core::GameState;
 
 pub fn run(game: &mut GameState) -> Result<()> {
     print_intro(game);
     let stdin = io::stdin();
+    let registry = CommandRegistry::default();
 
     loop {
         print!("t={:.1}分> ", game.simulation_minutes());
@@ -29,138 +33,12 @@ pub fn run(game: &mut GameState) -> Result<()> {
             continue;
         }
 
-        if let Err(error) = dispatch_command(game, trimmed) {
+        if let Err(error) = {
+            let mut context = CommandContext::new(game);
+            registry.execute_input(&mut context, trimmed)
+        } {
             println!("エラー: {error}");
         }
-    }
-}
-
-fn dispatch_command(game: &mut GameState, input: &str) -> Result<()> {
-    let mut parts = input.split_whitespace();
-    let command = parts
-        .next()
-        .ok_or_else(|| anyhow!("コマンドが指定されていません。"))?
-        .to_ascii_lowercase();
-
-    match command.as_str() {
-        "help" | "?" => {
-            print_help();
-            Ok(())
-        }
-        "overview" | "ov" => {
-            print_overview(game);
-            Ok(())
-        }
-        "inspect" | "show" => {
-            let token = parts
-                .next()
-                .ok_or_else(|| anyhow!("国を指定してください。"))?;
-            let idx = resolve_country_index(game, token)?;
-            print_country_details(game, idx);
-            Ok(())
-        }
-        "set" => {
-            let token = parts
-                .next()
-                .ok_or_else(|| anyhow!("国を指定してください。"))?;
-            let idx = resolve_country_index(game, token)?;
-            let infra = parse_percentage(parts.next(), "インフラ")?;
-            let military = parse_percentage(parts.next(), "軍事")?;
-            let welfare = parse_percentage(parts.next(), "福祉")?;
-            let diplomacy = parse_percentage(parts.next(), "外交")?;
-            let debt_service = parse_percentage(parts.next(), "債務返済")?;
-            let administration = parse_percentage(parts.next(), "行政維持")?;
-            let research = parse_percentage(parts.next(), "研究開発")?;
-            let ensure_core = match parts.next() {
-                Some(flag) if flag.eq_ignore_ascii_case("core") => true,
-                Some(flag) if flag.eq_ignore_ascii_case("nocore") => false,
-                Some(other) => {
-                    return Err(anyhow!(
-                        "未知のフラグです: {} (core または nocore を指定してください)",
-                        other
-                    ));
-                }
-                None => true,
-            };
-            let allocation = BudgetAllocation::new(
-                infra,
-                military,
-                welfare,
-                diplomacy,
-                debt_service,
-                administration,
-                research,
-                ensure_core,
-            )?;
-            game.update_allocations(idx, allocation)?;
-            println!(
-                "{} の予算配分を更新しました (合計 {:.1}%)",
-                game.countries()[idx].name,
-                allocation.total_percentage()
-            );
-            Ok(())
-        }
-        "tick" => {
-            let minutes = parts
-                .next()
-                .ok_or_else(|| anyhow!("経過させる分数を指定してください。"))?;
-            let minutes: f64 = minutes
-                .parse()
-                .map_err(|_| anyhow!("分数は数値で指定してください。"))?;
-            let multiplier = game.time_multiplier();
-            let reports = game.tick_minutes(minutes)?;
-            let mut stdout = io::stdout();
-            print_reports(&mut stdout, minutes * multiplier, &reports)?;
-            Ok(())
-        }
-        "speed" => {
-            let token = parts
-                .next()
-                .ok_or_else(|| anyhow!("新しい時間倍率を指定してください。"))?;
-            let multiplier = parse_speed(token)?;
-            game.set_time_multiplier(multiplier)?;
-            println!("時間倍率を x{:.2} に設定しました。", game.time_multiplier());
-            Ok(())
-        }
-        "industry" => {
-            let sub = parts
-                .next()
-                .ok_or_else(|| {
-                    anyhow!("industry サブコマンドを指定してください (例: subsidize)。")
-                })?
-                .to_ascii_lowercase();
-            match sub.as_str() {
-                "subsidize" => {
-                    let sector_token = parts.next().ok_or_else(|| {
-                        anyhow!("セクターを category:key 形式または一意なキーで指定してください。")
-                    })?;
-                    let percent_text = parts
-                        .next()
-                        .ok_or_else(|| anyhow!("補助金割合(%)を指定してください。"))?;
-                    let percent: f64 = percent_text
-                        .parse()
-                        .map_err(|_| anyhow!("補助金割合は数値で指定してください。"))?;
-                    let sector_id = game.sector_registry().resolve(sector_token)?;
-                    let overview = game.apply_industry_subsidy_by_id(&sector_id, percent)?;
-                    println!(
-                        "{} ({}:{}) に補助金 {:.1}% を設定しました。直近コスト {:.1} / 生産量 {:.1}",
-                        overview.name,
-                        sector_id.category,
-                        sector_id.key,
-                        overview.subsidy_percent,
-                        overview.last_cost,
-                        overview.last_output
-                    );
-                    Ok(())
-                }
-                other => bail!("未知の industry サブコマンドです: {}", other),
-            }
-        }
-        "quit" | "exit" => {
-            println!("シミュレーションを終了します。");
-            std::process::exit(0);
-        }
-        other => bail!("未知のコマンドです: {other}. help で一覧を確認してください。"),
     }
 }
 
@@ -171,7 +49,7 @@ fn print_intro(game: &GameState) {
     println!("speed コマンドで時間倍率を slow/normal/fast などに変更できます。");
 }
 
-fn print_help() {
+pub(super) fn print_help() {
     println!("利用可能なコマンド:");
     println!("  overview              主要指標と配分を一覧表示");
     println!("  inspect <国>          選択した国の詳細と外交関係を表示");
@@ -183,7 +61,7 @@ fn print_help() {
     println!("  quit                  終了");
 }
 
-fn print_overview(game: &GameState) {
+pub(super) fn print_overview(game: &GameState) {
     let next_event = game
         .next_event_minutes()
         .map(|m| format!("{:.1} 分", m as f64))
@@ -222,7 +100,7 @@ fn print_overview(game: &GameState) {
     }
 }
 
-fn print_country_details(game: &GameState, idx: usize) {
+pub(super) fn print_country_details(game: &GameState, idx: usize) {
     let country = &game.countries()[idx];
     let alloc = country.allocations();
     println!("-- {} の状況 --", country.name);
@@ -272,7 +150,7 @@ fn print_country_details(game: &GameState, idx: usize) {
     }
 }
 
-fn resolve_country_index(game: &GameState, token: &str) -> Result<usize> {
+pub(super) fn resolve_country_index(game: &GameState, token: &str) -> Result<usize> {
     game.find_country_index(token).ok_or_else(|| {
         anyhow!(
             "国を特定できませんでした: {} (番号か完全な国名を入力してください)",
@@ -281,7 +159,7 @@ fn resolve_country_index(game: &GameState, token: &str) -> Result<usize> {
     })
 }
 
-fn parse_percentage(value: Option<&str>, label: &str) -> Result<f64> {
+pub(super) fn parse_percentage(value: Option<&str>, label: &str) -> Result<f64> {
     let value = value.ok_or_else(|| anyhow!("{}予算の割合(%)を指定してください。", label))?;
     let percent: f64 = value
         .parse()
@@ -295,7 +173,7 @@ fn parse_percentage(value: Option<&str>, label: &str) -> Result<f64> {
     Ok(percent)
 }
 
-fn parse_speed(token: &str) -> Result<f64> {
+pub(super) fn parse_speed(token: &str) -> Result<f64> {
     let lower = token.to_ascii_lowercase();
     let multiplier = match lower.as_str() {
         "slow" | "low" => 0.5,
@@ -313,7 +191,11 @@ fn parse_speed(token: &str) -> Result<f64> {
     Ok(multiplier)
 }
 
-fn print_reports<W: Write>(writer: &mut W, minutes: f64, reports: &[String]) -> Result<()> {
+pub(super) fn print_reports<W: Write>(
+    writer: &mut W,
+    minutes: f64,
+    reports: &[String],
+) -> Result<()> {
     if reports.is_empty() {
         writeln!(writer, "{:.1} 分経過: 変化は特にありません。", minutes)?;
     } else {
@@ -327,6 +209,7 @@ fn print_reports<W: Write>(writer: &mut W, minutes: f64, reports: &[String]) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::commands::{CommandRegistry, Context as CommandContext};
     use super::*;
     use realgeopolitics_core::CountryDefinition;
 
@@ -385,8 +268,12 @@ mod tests {
     #[test]
     fn industry_subsidize_command_updates_registry() {
         let mut game = GameState::from_definitions(sample_definitions()).expect("game");
-        dispatch_command(&mut game, "industry subsidize energy:electricity 12.5")
-            .expect("dispatch industry subsidize");
+        {
+            let mut context = CommandContext::new(&mut game);
+            CommandRegistry::default()
+                .execute_input(&mut context, "industry subsidize energy:electricity 12.5")
+                .expect("dispatch industry subsidize");
+        }
 
         let registry = game.sector_registry();
         let energy = registry

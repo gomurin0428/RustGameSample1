@@ -99,7 +99,7 @@ _2025-09-27 更新_: 項目 4 を実装し、`ScriptedEventReport` と `formatte
 - CLI 専用ユニットテストを作る際に、現在は `run` を丸ごと動かすしかなく、入出力をモックしづらい。
 
 **分割方針案**
-1. `commands/mod.rs` を新設し、各コマンドを `trait Command { fn name() -> &'static str; fn execute(&mut Context, Args) -> Result<()>; }` 形式で実装する。
+1. ✅ (2025-09-27) `commands/mod.rs` を新設し、各コマンドを `trait Command { fn name() -> &'static str; fn execute(&mut Context, Args) -> Result<()>; }` 形式で実装する。
 2. 入出力は `CliIo` (読取/書込の抽象) に包み、`run` は IO とコマンドレジストリを束ねるシンプルなループへ縮小。
 3. フォーマット系 (国概要、財政詳細) は `formatters.rs` に隔離し、Web 側とロジックを共有できるよう構造体ベースにする。
 4. 引数パースは `structopt` 等への移行も視野に入れつつ、短期的にはユーティリティ関数群を `parser.rs` へ抽出する。
