@@ -56,6 +56,21 @@ impl GameState {
             .build()
     }
 
+    /// Creates a new GameState from a GameBootstrap and captures the initial fiscal history.
+    ///
+    /// The provided `bootstrap` supplies all required subsystems and initial state (clock/scheduler,
+    /// RNG, countries, market, scripted events, and industry engine); the returned `GameState` is
+    /// initialized and has its fiscal snapshots recorded for the current simulation time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Construct a bootstrap (details omitted) and initialize the game state.
+    /// let bootstrap = GameBootstrap::default();
+    /// let game = GameState::new(bootstrap);
+    /// // Newly created game starts at simulation time zero.
+    /// assert_eq!(game.simulation_minutes(), 0.0);
+    /// ```
     pub(crate) fn new(bootstrap: GameBootstrap) -> Self {
         let mut game = Self {
             simulation_clock: SimulationClock::new(bootstrap.scheduler),
@@ -145,6 +160,17 @@ impl GameState {
             .collect()
     }
 
+    /// Retrieve the fiscal snapshot for the country at the given index.
+    ///
+    /// Returns an error if the index is out of range.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # // assuming `game` is an initialized `GameState`
+    /// let snapshot = game.fiscal_snapshot_of(0).unwrap();
+    /// assert_eq!(snapshot.country_index(), 0);
+    /// ```
     pub fn fiscal_snapshot_of(&self, idx: usize) -> Result<FiscalSnapshot> {
         self.countries
             .get(idx)
@@ -152,10 +178,43 @@ impl GameState {
             .ok_or_else(|| anyhow!("指定された国の番号が無効です: {}", idx + 1))
     }
 
+    /// Look up the zero-based index of a scripted event by its identifier.
+    ///
+    /// Returns `Some(index)` if a scripted event with the given identifier exists, or `None` if no match is found.
+    ///
+    /// # Parameters
+    ///
+    /// - `id`: Scripted event identifier token to locate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let idx = game.scripted_event_index("debt_crisis");
+    /// assert!(idx.is_none() || idx.unwrap() >= 0);
+    /// ```
     pub fn scripted_event_index(&self, id: &str) -> Option<usize> {
         self.scripted_events.find_index(id)
     }
 
+    /// Retrieve the human-readable description for a scripted event by its identifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The scripted event identifier token.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&str)` containing the event description if an event with the given id exists, `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Assuming `game` is an initialized `GameState`
+    /// let desc = game.scripted_event_description("debt_crisis");
+    /// if let Some(text) = desc {
+    ///     assert!(text.contains("debt"));
+    /// }
+    /// ```
     pub fn scripted_event_description(&self, id: &str) -> Option<&str> {
         self.scripted_events.description_of(id)
     }
@@ -274,12 +333,45 @@ impl GameState {
         outcome.reports
     }
 
+    /// Executes the scripted event identified by `template_idx` using the current simulation time.
+    ///
+    /// The event is executed by the `ScriptedEventEngine` and may mutate country state.
+    ///
+    /// # Parameters
+    ///
+    /// - `template_idx` — Index of the scripted event template to execute in the engine's registry.
+    ///
+    /// # Returns
+    ///
+    /// A vector of human-readable report strings produced by the event, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Assuming `game` is a mutable GameState already constructed:
+    /// // let mut game = GameState::from_definitions(...).unwrap();
+    /// let reports = game.process_scripted_event(0);
+    /// for line in reports {
+    ///     println!("{}", line);
+    /// }
+    /// ```
     pub(crate) fn process_scripted_event(&mut self, template_idx: usize) -> Vec<String> {
         let minutes = self.simulation_clock.simulation_minutes();
         self.scripted_events
             .execute(template_idx, &mut self.countries, minutes)
     }
 
+    /// Records a fiscal snapshot for every country at the current simulation time.
+    ///
+    /// This appends a fiscal history entry to each country's ledger using the game's
+    /// current simulation minutes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Given a mutable GameState `game`, capture the current fiscal state for all countries.
+    /// game.capture_fiscal_history();
+    /// ```
     fn capture_fiscal_history(&mut self) {
         let minutes = self.simulation_minutes();
         for country in self.countries.iter_mut() {

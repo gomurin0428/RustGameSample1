@@ -36,6 +36,22 @@ impl GameBuilder {
         Ok(GameState::new(bootstrap))
     }
 
+    /// Builds a complete GameBootstrap from this GameBuilder by validating country definitions and
+    /// initializing countries, diplomacy relations, the scheduler (with core tasks), scripted events,
+    /// commodity market, and industry engine.
+    ///
+    /// On success returns a GameBootstrap containing the RNG, populated scheduler, country states,
+    /// commodity market, scripted event engine, and industry engine. Validation errors are returned
+    /// if the builder's definitions are invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Constructing a builder with definitions and converting into a bootstrap.
+    /// // This example intentionally ignores the result for brevity.
+    /// let builder = GameBuilder::new(vec![]);
+    /// let _ = builder.into_bootstrap();
+    /// ```
     pub(crate) fn into_bootstrap(self) -> Result<GameBootstrap> {
         self.validate_definitions()?;
         let GameBuilder { definitions, rng } = self;
@@ -134,6 +150,20 @@ fn register_core_tasks(scheduler: &mut Scheduler) {
     );
 }
 
+/// Create and schedule scripted events for the given number of countries and return the configured ScriptedEventEngine.
+///
+/// Each scripted event is scheduled on the provided `Scheduler` using the engine's initial delay and periodic check interval.
+///
+/// # Examples
+///
+/// ```
+/// # // constructs minimal objects needed for the example to compile in tests
+/// use crate::{register_scripted_events, Scheduler};
+///
+/// let mut scheduler = Scheduler::new();
+/// let engine = register_scripted_events(&mut scheduler, 2).expect("failed to register events");
+/// assert!(engine.len() >= 1);
+/// ```
 fn register_scripted_events(
     scheduler: &mut Scheduler,
     country_count: usize,
@@ -150,6 +180,16 @@ fn register_scripted_events(
     Ok(engine)
 }
 
+/// Clamp a metric value to the allowed metric range.
+///
+/// The result is constrained to the inclusive range defined by `MIN_METRIC` and `MAX_METRIC`.
+///
+/// # Examples
+///
+/// ```
+/// let v = clamp_metric(123);
+/// assert_eq!(v, 100.clamp(MIN_METRIC, MAX_METRIC)); // example using the same clamp semantics
+/// ```
 fn clamp_metric(value: i32) -> i32 {
     value.clamp(MIN_METRIC, MAX_METRIC)
 }
