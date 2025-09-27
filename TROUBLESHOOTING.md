@@ -13,6 +13,7 @@
 - `realgeopolitics-core` の `game` モジュールは複数ファイルに分割されています。`CountryState` を初期化する際は `CountryState::new(...)` を利用し、構造体リテラルで private フィールドを書き換えないでください（モジュール外からはアクセスできません）。
 - `GameState::tick_minutes` は `fiscal_prepared` フラグとスケジューラ準備を前提にしています。個別サブシステムだけ呼びたい場合は、`game::systems::fiscal::prepare_all_fiscal_flows` → 目的のシステム関数 → `GameState::capture_fiscal_history` の順序を守ってください。順序を崩すと財政履歴やレポートの整合性が崩れ、テストも失敗します。
 - `realgeopolitics/core/src/game/event_templates/loader.rs` のユニットテストは組み込みテンプレート数（現在2件）と ID 順序を固定で検証します。テンプレートを増減するときはテストを更新し、変更後に `cargo test` を実行してください。
+- 条件式パーサは `event_templates/condition/` 配下に分割されています。新しい条件メトリクスを追加する際は `parser.rs` のテストケースを更新し、`ConditionEvaluator` 実装が `CountryState` の想定外値に対して panic しないことを確認してください。
 - crate ルートから再エクスポートされる型は `GameState` / `CountryState` / `CountryDefinition` / `BudgetAllocation` / `TaxPolicy` / `TaxPolicyConfig` / `TimeStatus` に絞られました。以前 `CreditRating` や `CommodityMarket` を直接インポートしていたコードは `game` モジュール内の実装詳細として扱われるため、必要なら `GameState` 経由のメソッドを利用してください。
 - 低レベルのロジックは `game::systems::{fiscal, policy, diplomacy, events, tasks}` に分割されています。予算ロジックや外交ロジックを拡張する際は `GameState` に直接ロジックを追加せず、該当サブシステム内の関数を修正してください。
 - `GameState` の初期化手順は `game::bootstrap::GameBuilder` に集約されています。国定義のバリデーションやスケジューラ登録、イベントテンプレート読込を `GameState` 側に追加すると依存分離が崩れるので、初期化変更は `bootstrap.rs` 内の `initialise_countries` / `register_core_tasks` / `register_scripted_events` を経由してください。`GameState::new` に未初期化の依存を渡すと panic するため、テストでも必ず `GameBuilder` を通して生成してください。

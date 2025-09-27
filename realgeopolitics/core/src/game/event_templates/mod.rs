@@ -1,4 +1,5 @@
 mod compiler;
+mod condition;
 mod loader;
 
 pub(crate) use compiler::ScriptedEventState;
