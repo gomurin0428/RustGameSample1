@@ -8,6 +8,33 @@ use crate::game::{MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES};
 
 use super::condition::{ConditionEvaluator, parse_condition};
 
+/// Compiles a raw event template into a ready-to-run CompiledEventTemplate.
+///
+/// On error, the returned `Err` includes a localized message that identifies the
+/// source template by `source_index`.
+///
+/// # Returns
+///
+/// `Ok(CompiledEventTemplate)` when compilation succeeds, `Err` with a message
+/// containing `source_index` when compilation fails.
+///
+/// # Examples
+///
+/// ```
+/// # use realgeopolitics::game::event_templates::compiler::{compile_template, EventTemplateRaw};
+/// let raw = EventTemplateRaw {
+///     id: "example".into(),
+///     name: "Example".into(),
+///     description: "An example template".into(),
+///     condition: "true".into(),
+///     check_minutes: 1,
+///     initial_delay_minutes: 0,
+///     cooldown_minutes: 720,
+///     effects: Vec::new(),
+/// };
+/// let compiled = compile_template(0, raw);
+/// assert!(compiled.is_ok());
+/// ```
 pub(super) fn compile_template(
     source_index: usize,
     raw: EventTemplateRaw,
@@ -51,6 +78,25 @@ impl EventTemplateRaw {
         120
     }
 
+    /// Default cooldown duration for an event template, expressed in minutes.
+    
+    ///
+    
+    /// Returns the default cooldown in minutes (720).
+    
+    ///
+    
+    /// # Examples
+    
+    ///
+    
+    /// ```
+    
+    /// const DEFAULT: u64 = default_cooldown_minutes();
+    
+    /// assert_eq!(DEFAULT, 720);
+    
+    /// ```
     const fn default_cooldown_minutes() -> u64 {
         720
     }
@@ -81,6 +127,36 @@ impl fmt::Debug for CompiledEventTemplate {
 }
 
 impl CompiledEventTemplate {
+    /// Creates a compiled event template from a raw, deserialized definition.
+    ///
+    /// Validates `raw.check_minutes` (must be at least 1), parses the condition expression,
+    /// and converts each raw effect into a compiled effect. Returns an error if validation,
+    /// condition parsing, or effect compilation fails.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(CompiledEventTemplate)` on success; `Err` when `check_minutes` is zero or when
+    /// condition/effect parsing fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crate::game::event_templates::EventTemplateRaw;
+    ///
+    /// let raw = EventTemplateRaw {
+    ///     id: "evt".into(),
+    ///     name: "Example".into(),
+    ///     description: "An example event".into(),
+    ///     condition: "true".into(),
+    ///     check_minutes: 1,
+    ///     initial_delay_minutes: 0,
+    ///     cooldown_minutes: 10,
+    ///     effects: vec![],
+    /// };
+    ///
+    /// let compiled = CompiledEventTemplate::new(raw).unwrap();
+    /// assert_eq!(compiled.check_minutes(), 1);
+    /// ```
     fn new(raw: EventTemplateRaw) -> Result<Self> {
         if raw.check_minutes == 0 {
             return Err(anyhow!("check_minutes は 1 以上である必要があります"));
@@ -102,26 +178,90 @@ impl CompiledEventTemplate {
         })
     }
 
+    /// Get the event template's identifier.
+    ///
+    /// Returns the template identifier as a string slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let id = compiled.id();
+    /// assert_eq!(id, "example_id");
+    /// ```
     pub(super) fn id(&self) -> &str {
         &self.id
     }
 
+    /// Returns the compiled event template's name.
+    ///
+    /// # Returns
+    ///
+    /// A string slice containing the template's name.
     pub(super) fn name(&self) -> &str {
         &self.name
     }
 
+    /// Accesses the event template's description.
+    ///
+    /// # Returns
+    ///
+    /// The description string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let desc = compiled.description();
+    /// assert!(!desc.is_empty());
+    /// ```
     pub(super) fn description(&self) -> &str {
         &self.description
     }
 
+    /// The configured interval between condition evaluations for this template, in minutes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // `tmpl` is a compiled event template
+    /// let minutes = tmpl.check_minutes();
+    /// assert!(minutes >= 1);
+    /// ```
     pub(super) fn check_minutes(&self) -> u64 {
         self.check_minutes
     }
 
+    /// The initial delay configured for the template, in minutes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // given a `CompiledEventTemplate` instance named `compiled`
+    /// let delay = compiled.initial_delay_minutes();
+    /// ```
     pub(super) fn initial_delay_minutes(&self) -> u64 {
         self.initial_delay_minutes
     }
 
+    /// Determine whether this compiled event template may trigger for a given country at a specific time.
+    ///
+    /// The template may trigger only if its condition evaluates to true for `country` and the cooldown period
+    /// since `last_triggered_at` has elapsed (or there is no prior trigger).
+    ///
+    /// # Parameters
+    ///
+    /// - `last_triggered_at`: an optional timestamp in minutes of the last trigger; `None` means the template has never triggered.
+    /// - `current_minutes`: current timestamp in minutes used to evaluate cooldown.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the condition matches and either `last_triggered_at` is `None` or `current_minutes - last_triggered_at >= cooldown_minutes`, `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Assume `tmpl` is a CompiledEventTemplate and `country` a CountryState:
+    /// // let can = tmpl.can_trigger(&country, Some(100.0), 820.0);
+    /// ```
     pub(super) fn can_trigger(
         &self,
         country: &CountryState,
@@ -139,6 +279,11 @@ impl CompiledEventTemplate {
         true
     }
 
+    /// Check whether the compiled condition holds for a given country.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the template's condition evaluates to `true` for `country`, `false` otherwise.
     fn condition_matches(&self, country: &CountryState) -> bool {
         self.condition.evaluate(country)
     }
@@ -220,11 +365,44 @@ fn clamp_metric_delta(base: i32, delta: f64) -> i32 {
     candidate.clamp(MIN_METRIC, MAX_METRIC)
 }
 
+/// Clamp a resource value after applying a fractional delta.
+///
+/// Applies `delta` to `base`, rounds to the nearest integer, and clamps the result to the
+/// allowed resource range defined by `MIN_RESOURCES` and `MAX_RESOURCES`.
+///
+/// # Parameters
+///
+/// - `base`: current resource value.
+/// - `delta`: change to apply to `base` (may be fractional).
+///
+/// # Returns
+///
+/// The resulting resource value after applying `delta`, rounded to the nearest integer and
+/// constrained to be between `MIN_RESOURCES` and `MAX_RESOURCES`.
+///
+/// # Examples
+///
+/// ```
+/// let base = 10;
+/// let new = clamp_resource_delta(base, 2.6);
+/// assert_eq!(new, 13); // 10 + 2.6 -> 12.6 rounds to 13
+///
+/// let capped = clamp_resource_delta(base, -1000.0);
+/// assert_eq!(capped, MIN_RESOURCES);
+/// ```
 fn clamp_resource_delta(base: i32, delta: f64) -> i32 {
     let candidate = (base as f64 + delta).round() as i32;
     candidate.clamp(MIN_RESOURCES, MAX_RESOURCES)
 }
 impl CompiledEventTemplate {
+    /// Applies this template's compiled effects to the given country and collects any generated report messages.
+    ///
+    /// Iterates all compiled effects: metric adjustments update the country's state in-place; report effects produce formatted messages
+    /// (with placeholders like `{country}` substituted) which are returned.
+    ///
+    /// # Returns
+    ///
+    /// A vector of report messages produced by applying the effects; empty if no report effects were present.
     pub(super) fn apply_effects(&self, country: &mut CountryState) -> Vec<String> {
         let mut reports = Vec::new();
         for effect in &self.effects {
