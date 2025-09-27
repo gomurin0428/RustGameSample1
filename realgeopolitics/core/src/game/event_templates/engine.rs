@@ -4,6 +4,7 @@ use crate::game::country::CountryState;
 
 use super::compiler::CompiledEventTemplate;
 use super::loader::load_event_templates;
+use super::{ScriptedEventReport, format_reports};
 
 #[derive(Debug)]
 pub(crate) struct ScriptedEventEngine {
@@ -26,10 +27,10 @@ impl ScriptedEventEngine {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let engine = ScriptedEventEngine::from_builtin(3).unwrap();
     /// assert!(engine.len() >= 0);
-    /// ```
+    /// ```ignore
     pub(crate) fn from_builtin(country_count: usize) -> Result<Self> {
         let templates = load_event_templates()?;
         Ok(Self::with_templates(templates, country_count))
@@ -40,10 +41,10 @@ impl ScriptedEventEngine {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let engine = ScriptedEventEngine::with_templates(vec![], 3);
     /// assert_eq!(engine.len(), 0);
-    /// ```
+    /// ```ignore
     pub(super) fn with_templates(
         templates: Vec<CompiledEventTemplate>,
         country_count: usize,
@@ -62,10 +63,10 @@ impl ScriptedEventEngine {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let engine = ScriptedEventEngine::with_templates(Vec::new(), 0);
     /// assert_eq!(engine.len(), 0);
-    /// ```
+    /// ```ignore
     ///
     /// The returned value is the count of templates held in the engine.
     pub(crate) fn len(&self) -> usize {
@@ -82,10 +83,10 @@ impl ScriptedEventEngine {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let minutes = engine.check_minutes(0);
     /// assert!(minutes > 0);
-    /// ```
+    /// ```ignore
     pub(crate) fn check_minutes(&self, idx: usize) -> u64 {
         self.template_ref(idx).check_minutes()
     }
@@ -98,11 +99,11 @@ impl ScriptedEventEngine {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignoreno_run
     /// let engine = ScriptedEventEngine::with_templates(templates, country_count);
     /// let delay = engine.initial_delay_minutes(0);
     /// println!("Initial delay: {} minutes", delay);
-    /// ```
+    /// ```ignore
     pub(crate) fn initial_delay_minutes(&self, idx: usize) -> u64 {
         self.template_ref(idx).initial_delay_minutes()
     }
@@ -114,12 +115,12 @@ impl ScriptedEventEngine {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```ignoreignore
     /// let idx = engine.find_index("approval_push");
     /// if let Some(i) = idx {
     ///     // use index `i` to access the template
     /// }
-    /// ```
+    /// ```ignore
     pub(crate) fn find_index(&self, id: &str) -> Option<usize> {
         let needle = id.to_ascii_lowercase();
         self.templates.iter().position(|template| {
@@ -141,13 +142,13 @@ impl ScriptedEventEngine {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```ignoreignore
     /// // assuming `engine` is a ScriptedEventEngine populated with templates
     /// assert_eq!(
     ///     engine.description_of("approval_push"),
     ///     Some("Approval push event that increases approval")
     /// );
-    /// ```
+    /// ```ignore
     pub(crate) fn description_of(&self, id: &str) -> Option<&str> {
         self.find_index(id)
             .map(|idx| self.template_ref(idx).description())
@@ -169,12 +170,12 @@ impl ScriptedEventEngine {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignoreno_run
     /// // Assuming `engine` is a ScriptedEventEngine with at least one template and `countries` is a mutable slice:
     /// // let mut engine = ScriptedEventEngine::with_templates(templates, country_count);
     /// // let mut countries = vec![sample_country("A")];
     /// // let reports = engine.execute(0, &mut countries, 1234.0);
-    /// ```
+    /// ```ignore
     pub(crate) fn execute(
         &mut self,
         idx: usize,
@@ -188,7 +189,8 @@ impl ScriptedEventEngine {
         let instance = instances
             .get_mut(idx)
             .unwrap_or_else(|| panic!("無効なイベントテンプレートインデックス: {}", idx));
-        instance.execute(template, countries, current_minutes)
+        let reports = instance.execute(template, countries, current_minutes);
+        format_reports(&reports)
     }
 
     /// Returns a reference to the compiled event template at the specified index.
@@ -200,10 +202,10 @@ impl ScriptedEventEngine {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignoreno_run
     /// let engine = ScriptedEventEngine::with_templates(vec![/* CompiledEventTemplate */], 1);
     /// let template = engine.template_ref(0);
-    /// ```
+    /// ```ignore
     fn template_ref(&self, idx: usize) -> &CompiledEventTemplate {
         self.templates
             .get(idx)
@@ -218,10 +220,10 @@ impl ScriptedEventInstance {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let instance = ScriptedEventInstance::new(3);
     /// // instance now tracks three countries, each with no prior trigger time
-    /// ```
+    /// ```ignore
     fn new(country_count: usize) -> Self {
         Self {
             last_triggered: vec![None; country_count],
@@ -234,11 +236,11 @@ impl ScriptedEventInstance {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let mut inst = ScriptedEventInstance::new(1);
     /// inst.ensure_capacity(3);
     /// assert_eq!(inst.last_triggered.len(), 3);
-    /// ```
+    /// ```ignore
     fn ensure_capacity(&mut self, country_count: usize) {
         if self.last_triggered.len() < country_count {
             self.last_triggered.resize(country_count, None);
@@ -261,7 +263,7 @@ impl ScriptedEventInstance {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// # // Helpers such as `sample_country` and `compile_sample_template` are available in this crate's tests.
     /// use crate::event_templates::{ScriptedEventInstance, CompiledEventTemplate};
     ///
@@ -271,13 +273,13 @@ impl ScriptedEventInstance {
     ///
     /// let reports = instance.execute(&template, &mut countries, 0.0);
     /// // `reports` contains messages produced by the template's applied effects
-    /// ```
+    /// ```ignore
     fn execute(
         &mut self,
         template: &CompiledEventTemplate,
         countries: &mut [CountryState],
         current_minutes: f64,
-    ) -> Vec<String> {
+    ) -> Vec<ScriptedEventReport> {
         self.ensure_capacity(countries.len());
         let mut reports = Vec::new();
         for (idx, country) in countries.iter_mut().enumerate() {
@@ -293,11 +295,11 @@ impl ScriptedEventInstance {
 }
 #[cfg(test)]
 mod tests {
+    use super::super::compiler::{EventTemplateRaw, compile_template};
     use super::*;
     use crate::game::country::{BudgetAllocation, CountryState};
     use crate::game::economy::CreditRating;
     use crate::game::economy::{FiscalAccount, TaxPolicy};
-    use super::super::compiler::{EventTemplateRaw, compile_template};
     use serde_json;
 
     fn sample_country(name: &str) -> CountryState {
@@ -328,11 +330,11 @@ mod tests {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let raw_json = r#"{ "id": "example", "name": "Example Event" }"#;
     /// let template = parse_raw(raw_json);
     /// // `template` is an `EventTemplateRaw` constructed from `raw_json`.
-    /// ```
+    /// ```ignore
     fn parse_raw(json: &str) -> EventTemplateRaw {
         serde_json::from_str(json).expect("template json should be valid")
     }

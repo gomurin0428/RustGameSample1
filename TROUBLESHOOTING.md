@@ -29,5 +29,6 @@
 - CLI の `industry subsidize` コマンドではセクターを `category:key` 形式で指定すると確実です。キーだけ指定した場合に複数カテゴリで重複しているとエラーになるので、エネルギー電力なら `energy:electricity` のように入力してください。
 - `config/events` 配下のテンプレートはビルド時に読み込まれ、未知のメトリクス名や構文エラーがある場合は `panic!` で停止します。条件式は `stability`, `debt_ratio`, `cash_reserve` など既定の識別子と `&&`/`||`/比較演算子のみ使用してください。評価は `ScriptedEvent` タスク内で行われるため、テンプレートを追加したら `cargo test` で必ず検証してください。
 - `ScriptedEventEngine` はテンプレート順序をそのままスケジューラに登録するため、テンプレート数や並びを変更した場合は必ず `GameBuilder` 経由で再初期化してください。既存の `Scheduler` を流用するとインデックスずれで `panic!` が発生します。
+- `event_templates::formatter::ScriptedEventReport` が扱うプレースホルダは現状 `{country}` のみです。新しい置換トークンを追加する際はフォーマッタ側に対応を実装しないとメッセージに生文字列が残ります。
 - `TaxPolicy` の税率を変更した場合、反映は次回の `tick` 実行時です。繰越税収 (`pending_revenue`) は自動で次 tick の即時収入に加算されるため、短時間で何度も切り替えると直前の繰越が期待より多く見える場合があります。
 - CommodityMarket の価格更新は `tick` ごとに行われ、ショック発生時は価格が大きく変動します。テストで安定した結果が必要な場合は `GameState::from_definitions_with_seed` を利用し、`StdRng` のシードを固定してください。

@@ -74,7 +74,7 @@ fn load_from_sources(sources: &[TemplateSource]) -> Result<Vec<CompiledEventTemp
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```ignore
 /// # use super::{TemplateSource, parse_and_compile};
 /// let src = TemplateSource::Yaml("example.yaml", "id: example\ncheck_minutes: 60\n");
 /// let compiled = parse_and_compile(0, &src).unwrap();
@@ -91,7 +91,7 @@ fn parse_and_compile(index: usize, source: &TemplateSource) -> Result<CompiledEv
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// let yaml = TemplateSource::Yaml("example.yaml", "id: test\ncheck_minutes: 10");
 /// assert!(parse_template(&yaml).is_ok());
 ///

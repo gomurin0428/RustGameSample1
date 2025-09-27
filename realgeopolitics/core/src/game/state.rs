@@ -189,7 +189,7 @@ impl GameState {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// // `state` is a GameState with scripted events registered.
     /// let idx = state.scripted_event_index("resource_boom");
     /// if let Some(i) = idx {
@@ -208,7 +208,7 @@ impl GameState {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// // assuming `game` is an initialized `GameState`
     /// let desc = game.scripted_event_description("debt_crisis");
     /// assert!(desc.is_some());

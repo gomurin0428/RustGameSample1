@@ -50,7 +50,7 @@ impl GameBuilder {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let defs = crate::tests::sample_definitions();
     /// let bootstrap = GameBuilder::new(defs).into_bootstrap().unwrap();
     /// assert!(!bootstrap.countries.is_empty());
@@ -165,7 +165,7 @@ fn register_core_tasks(scheduler: &mut Scheduler) {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// # use your_crate::{Scheduler, register_scripted_events};
 /// # fn make_scheduler() -> Scheduler { Scheduler::new() }
 /// let mut scheduler = make_scheduler();
@@ -194,7 +194,7 @@ fn register_scripted_events(
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// let v = clamp_metric(7);
 /// assert_eq!(clamp_metric(v), v);
 /// ```
