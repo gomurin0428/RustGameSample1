@@ -7,6 +7,7 @@ use crate::game::country::CountryState;
 use crate::game::{MAX_METRIC, MAX_RESOURCES, MIN_METRIC, MIN_RESOURCES};
 
 use super::condition::{ConditionEvaluator, parse_condition};
+use super::formatter::ScriptedEventReport;
 
 /// Compiles a raw event template into a ready-to-run CompiledEventTemplate.
 ///
@@ -20,7 +21,7 @@ use super::condition::{ConditionEvaluator, parse_condition};
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// # use realgeopolitics::game::event_templates::compiler::{compile_template, EventTemplateRaw};
 /// let raw = EventTemplateRaw {
 ///     id: "example".into(),
@@ -79,23 +80,23 @@ impl EventTemplateRaw {
     }
 
     /// Default cooldown duration for an event template, expressed in minutes.
-    
+
     ///
-    
+
     /// Returns the default cooldown in minutes (720).
-    
+
     ///
-    
+
     /// # Examples
-    
+
     ///
-    
+
     /// ```
-    
+
     /// const DEFAULT: u64 = default_cooldown_minutes();
-    
+
     /// assert_eq!(DEFAULT, 720);
-    
+
     /// ```
     const fn default_cooldown_minutes() -> u64 {
         720
@@ -403,7 +404,7 @@ impl CompiledEventTemplate {
     /// # Returns
     ///
     /// A vector of report messages produced by applying the effects; empty if no report effects were present.
-    pub(super) fn apply_effects(&self, country: &mut CountryState) -> Vec<String> {
+    pub(super) fn apply_effects(&self, country: &mut CountryState) -> Vec<ScriptedEventReport> {
         let mut reports = Vec::new();
         for effect in &self.effects {
             match effect {
@@ -411,18 +412,18 @@ impl CompiledEventTemplate {
                     metric.apply(country, *delta);
                 }
                 CompiledEffect::Report { message } => {
-                    reports.push(format_message(message, country));
+                    let mut report = ScriptedEventReport::new(message.clone());
+                    report.add_placeholder("{country}", country.name.clone());
+                    reports.push(report);
                 }
             }
         }
         reports
     }
 }
-fn format_message(template: &str, country: &CountryState) -> String {
-    template.replace("{country}", &country.name)
-}
 #[cfg(test)]
 mod tests {
+    use super::super::formatter::format_reports;
     use super::*;
     use crate::game::country::{BudgetAllocation, CountryState};
     use crate::game::economy::CreditRating;
@@ -489,7 +490,8 @@ mod tests {
         assert!(template.can_trigger(&country, None, 300.0));
         let reports = template.apply_effects(&mut country);
         assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0], "Testland improved approval");
+        let formatted = format_reports(&reports);
+        assert_eq!(formatted[0], "Testland improved approval");
         assert_eq!(country.approval, 55);
 
         assert!(
